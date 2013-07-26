@@ -217,6 +217,7 @@ func (t *Term) put(c rune) {
 			default:
 				// TODO: stderr log, unhandled charset
 			}
+			t.esc = 0
 		} else if t.esc&escTest != 0 {
 			// DEC screen alignment test
 			if c == '8' {
