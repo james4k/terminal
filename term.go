@@ -75,6 +75,8 @@ type cursor struct {
 	state uint8
 }
 
+type stateFn func(c rune)
+
 type Term struct {
 	cols, rows    int
 	lines         []line
@@ -83,7 +85,7 @@ type Term struct {
 	cur, curSaved cursor
 	top, bottom   int // scroll limits
 	mode          modeFlags
-	esc           int32 // escape state flags
+	state         stateFn
 	str           strEscape
 	csi           csiEscape
 	numlock       bool
@@ -129,194 +131,12 @@ func (t *Term) ReadFrom(r io.Reader) (int64, error) {
 	return written, nil
 }
 
-// TODO: eventually we should refactor this ESC state machine into
-// something more idiomatic. method values instead of the bitmask.
 func (t *Term) put(c rune) {
-	control := c < 0x20 || c == 0177
-	// STR sequences can contain control codes, so must check early
-	if t.esc&escStr != 0 {
-		switch c {
-		case '\033':
-			t.esc = escStart | escStrEnd
-		case '\a': // backwards compatiblity to xterm
-			t.esc = 0
-			t.handleSTR()
-		default:
-			t.str.put(c)
-		}
-		return
+	t.state(c)
+
+	if true {
 	}
 
-	// Directly from st:
-	// Actions of control codes must be performed as soon as they arrive
-	// because they can be embedded inside a control sequence, and they must
-	// not cause conflicts with sequences.
-	if control {
-		switch c {
-		// HT
-		case '\t':
-			t.putTab(true)
-			return
-		// BS
-		case '\b':
-			t.moveTo(t.cur.x-1, t.cur.y)
-			return
-		// CR
-		case '\r':
-			t.moveTo(0, t.cur.y)
-			return
-		// LF, VT, LF
-		case '\f', '\v', '\n':
-			// go to first col if mode is set
-			t.newline(t.mode&modeCRLF != 0)
-			return
-		// BEL
-		case '\a':
-			// TODO: emit sound
-			// TODO: window alert if not focused
-			return
-		// ESC
-		case 033:
-			t.csi.reset()
-			t.esc = escStart
-			return
-		// SO, SI
-		case 016, 017:
-			// different charsets not supported. apps should use the correct
-			// alt charset escapes, probably for line drawing
-			return
-		// SUB, CAN
-		case 032, 030:
-			t.csi.reset()
-			return
-		// ignore ENQ, NUL, XON, XOFF, DEL
-		case 005, 000, 021, 023, 0177:
-			return
-		}
-	} else if t.esc&escStart != 0 {
-		if t.esc&escCSI != 0 {
-			if t.csi.put(byte(c)) {
-				t.handleCSI()
-			}
-		} else if t.esc&escStrEnd != 0 {
-			t.esc = 0
-			if c == '\\' {
-				t.handleSTR()
-			}
-		} else if t.esc&escAltCharset != 0 {
-			switch c {
-			case '0': // line drawing set
-				t.cur.attr.mode |= glyphAttrGfx
-			case 'B': // USASCII
-				t.cur.attr.mode &^= glyphAttrGfx
-			case 'A', // UK (ignored)
-				'<', // multinational (ignored)
-				'5', // Finnish (ignored)
-				'C', // Finnish (ignored)
-				'K': // German (ignored)
-			default:
-				// TODO: stderr log, unhandled charset
-			}
-			t.esc = 0
-		} else if t.esc&escTest != 0 {
-			// DEC screen alignment test
-			if c == '8' {
-				for y := 0; y < t.rows; y++ {
-					for x := 0; x < t.cols; x++ {
-						t.setChar('E', &t.cur.attr, x, y)
-					}
-				}
-			}
-			t.esc = 0
-		} else {
-			switch c {
-			case '[':
-				t.esc |= escCSI
-			case '#':
-				t.esc |= escTest
-			case 'P', // DCS - Device Control String
-				'_', // APC - Application Program Command
-				'^', // PM - Privacy Message
-				']', // OSC - Operating System Command
-				'k': // old title set compatibility
-				t.str.reset()
-				t.str.typ = c
-				t.esc |= escStr
-			case '(': // set primary charset G0
-				t.esc |= escAltCharset
-			case ')', // set secondary charset G1 (ignored)
-				'*', // set tertiary charset G2 (ignored)
-				'+': // set quaternary charset G3 (ignored)
-				t.esc = 0
-			case 'D': // IND - linefeed
-				if t.cur.y == t.bottom {
-					// TODO: t.scrollUp(t.top, 1)
-				} else {
-					t.moveTo(t.cur.x, t.cur.y+1)
-				}
-				t.esc = 0
-			case 'E': // NEL - next line
-				t.newline(true)
-				t.esc = 0
-			case 'H': // HTS - horizontal tab stop
-				t.tabs[t.cur.x] = true
-				t.esc = 0
-			case 'M': // RI - reverse index
-				if t.cur.y == t.top {
-					// TODO: t.scrollDown(t.top, 1)
-				} else {
-					t.moveTo(t.cur.x, t.cur.y-1)
-				}
-			case 'Z': // DECID - identify terminal
-				// TODO: write to our writer our id
-				t.esc = 0
-			case 'c': // RIS - reset to initial state
-				t.reset()
-				t.esc = 0
-			case '=': // DECPAM - application keypad
-				t.mode |= modeAppKeypad
-				t.esc = 0
-			case '>': // DECPNM - normal keypad
-				t.mode &^= modeAppKeypad
-				t.esc = 0
-			case '7': // DECSC - save cursor
-				t.saveCursor()
-				t.esc = 0
-			case '8': // DECRC - restore cursor
-				t.restoreCursor()
-				t.esc = 0
-			case '\\': // ST - stop
-				t.esc = 0
-			default:
-				// TODO: log to stderr unknown ESC sequence
-				t.esc = 0
-			}
-		}
-		// don't print characters that are part of a sequence
-		return
-	}
-
-	if control && t.cur.attr.mode&glyphAttrGfx == 0 {
-		return
-	}
-
-	// TODO: update selection
-
-	if t.mode&modeWrap != 0 && t.cur.state&cursorWrapNext != 0 {
-		t.lines[t.cur.y][t.cur.x].mode |= glyphAttrWrap
-		t.newline(true)
-	}
-
-	if t.mode&modeInsert != 0 && t.cur.x+1 < t.cols {
-		// TODO: move shiz, look at st.c:2458
-	}
-
-	t.setChar(c, &t.cur.attr, t.cur.x, t.cur.y)
-	if t.cur.x+1 < t.cols {
-		t.moveTo(t.cur.x+1, t.cur.y)
-	} else {
-		t.cur.state |= cursorWrapNext
-	}
 }
 
 func (t *Term) putTab(forward bool) {
