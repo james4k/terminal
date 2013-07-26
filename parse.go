@@ -10,7 +10,7 @@ func (t *Term) parse(c rune) {
 			return
 		}
 	}
-	// TODO: update selection
+	// TODO: update selection; see st.c:2450
 
 	if t.mode&modeWrap != 0 && t.cur.state&cursorWrapNext != 0 {
 		t.lines[t.cur.y][t.cur.x].mode |= glyphAttrWrap
@@ -29,12 +29,83 @@ func (t *Term) parse(c rune) {
 	}
 }
 
+func (t *Term) parseEsc(c rune) {
+	if t.handleControlCodes(c) {
+		return
+	}
+	next := t.parse
+	switch c {
+	case '[':
+		next = t.parseEscCSI
+	case '#':
+		next = t.parseEscTest
+	case 'P', // DCS - Device Control String
+		'_', // APC - Application Program Command
+		'^', // PM - Privacy Message
+		']', // OSC - Operating System Command
+		'k': // old title set compatibility
+		t.str.reset()
+		t.str.typ = c
+		next = t.parseEscStr
+	case '(': // set primary charset G0
+		next = t.parseEscAltCharset
+	case ')', // set secondary charset G1 (ignored)
+		'*', // set tertiary charset G2 (ignored)
+		'+': // set quaternary charset G3 (ignored)
+	case 'D': // IND - linefeed
+		if t.cur.y == t.bottom {
+			t.scrollUp(t.top, 1)
+		} else {
+			t.moveTo(t.cur.x, t.cur.y+1)
+		}
+	case 'E': // NEL - next line
+		t.newline(true)
+	case 'H': // HTS - horizontal tab stop
+		t.tabs[t.cur.x] = true
+	case 'M': // RI - reverse index
+		if t.cur.y == t.top {
+			t.scrollDown(t.top, 1)
+		} else {
+			t.moveTo(t.cur.x, t.cur.y-1)
+		}
+	case 'Z': // DECID - identify terminal
+		// TODO: write to our writer our id
+	case 'c': // RIS - reset to initial state
+		t.reset()
+	case '=': // DECPAM - application keypad
+		t.mode |= modeAppKeypad
+	case '>': // DECPNM - normal keypad
+		t.mode &^= modeAppKeypad
+	case '7': // DECSC - save cursor
+		t.saveCursor()
+	case '8': // DECRC - restore cursor
+		t.restoreCursor()
+	case '\\': // ST - stop
+	default:
+		t.logf("unknown ESC sequence '%c'\n", c)
+	}
+	t.state = next
+}
+
 func (t *Term) parseEscCSI(c rune) {
 	if t.handleControlCodes(c) {
 		return
 	}
 	if t.csi.put(byte(c)) {
+		t.state = t.parse
 		t.handleCSI()
+	}
+}
+
+func (t *Term) parseEscStr(c rune) {
+	switch c {
+	case '\033':
+		t.state = t.parseEscStrEnd
+	case '\a': // backwards compatiblity to xterm
+		t.state = t.parse
+		t.handleSTR()
+	default:
+		t.str.put(c)
 	}
 }
 
@@ -63,7 +134,7 @@ func (t *Term) parseEscAltCharset(c rune) {
 		'C', // Finnish (ignored)
 		'K': // German (ignored)
 	default:
-		// TODO: stderr log, unhandled charset
+		t.logf("unknown alt. charset '%c'\n", c)
 	}
 	t.state = t.parse
 }
@@ -81,87 +152,6 @@ func (t *Term) parseEscTest(c rune) {
 		}
 	}
 	t.state = t.parse
-}
-
-func (t *Term) parseEsc(c rune) {
-	if t.handleControlCodes(c) {
-		return
-	}
-	switch c {
-	case '[':
-		t.state = t.parseEscCSI
-	case '#':
-		t.state = t.parseEscTest
-	case 'P', // DCS - Device Control String
-		'_', // APC - Application Program Command
-		'^', // PM - Privacy Message
-		']', // OSC - Operating System Command
-		'k': // old title set compatibility
-		t.str.reset()
-		t.str.typ = c
-		t.state = t.parseEscStr
-	case '(': // set primary charset G0
-		t.state = t.parseEscAltCharset
-	case ')', // set secondary charset G1 (ignored)
-		'*', // set tertiary charset G2 (ignored)
-		'+': // set quaternary charset G3 (ignored)
-		t.state = t.parse
-	case 'D': // IND - linefeed
-		if t.cur.y == t.bottom {
-			// TODO: t.scrollUp(t.top, 1)
-		} else {
-			t.moveTo(t.cur.x, t.cur.y+1)
-		}
-		t.state = t.parse
-	case 'E': // NEL - next line
-		t.newline(true)
-		t.state = t.parse
-	case 'H': // HTS - horizontal tab stop
-		t.tabs[t.cur.x] = true
-		t.state = t.parse
-	case 'M': // RI - reverse index
-		if t.cur.y == t.top {
-			// TODO: t.scrollDown(t.top, 1)
-		} else {
-			t.moveTo(t.cur.x, t.cur.y-1)
-		}
-		t.state = t.parse
-	case 'Z': // DECID - identify terminal
-		// TODO: write to our writer our id
-		t.state = t.parse
-	case 'c': // RIS - reset to initial state
-		t.reset()
-		t.state = t.parse
-	case '=': // DECPAM - application keypad
-		t.mode |= modeAppKeypad
-		t.state = t.parse
-	case '>': // DECPNM - normal keypad
-		t.mode &^= modeAppKeypad
-		t.state = t.parse
-	case '7': // DECSC - save cursor
-		t.saveCursor()
-		t.state = t.parse
-	case '8': // DECRC - restore cursor
-		t.restoreCursor()
-		t.state = t.parse
-	case '\\': // ST - stop
-		t.state = t.parse
-	default:
-		// TODO: log to stderr unknown ESC sequence
-		t.state = t.parse
-	}
-}
-
-func (t *Term) parseEscStr(c rune) {
-	switch c {
-	case '\033':
-		t.state = t.parseEscStrEnd
-	case '\a': // backwards compatiblity to xterm
-		t.state = t.parse
-		t.handleSTR()
-	default:
-		t.str.put(c)
-	}
 }
 
 func (t *Term) handleControlCodes(c rune) bool {

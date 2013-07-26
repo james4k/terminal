@@ -1,8 +1,9 @@
 package terminal
 
-// TODO: once lazy arg parsing is done for CSI, we can probably just use
-// csiEscape for these sequences as well which would simplify things and cut a
-// bit of memory usage on the buffers.
+import (
+	"strconv"
+	"strings"
+)
 
 // STR sequences are similar to CSI sequences, but have string arguments (and
 // as far as I can tell, don't really have a name; STR is the name I took from
@@ -10,12 +11,12 @@ package terminal
 type strEscape struct {
 	typ  rune
 	buf  []rune
-	args [][]rune
+	args []string
 }
 
 func (s *strEscape) reset() {
 	s.typ = 0
-	s.buf = nil
+	s.buf = s.buf[:0]
 	s.args = nil
 }
 
@@ -31,6 +32,25 @@ func (s *strEscape) put(c rune) {
 }
 
 func (s *strEscape) parse() {
+	s.args = strings.Split(string(s.buf), ";")
+}
+
+func (s *strEscape) arg(i, def int) int {
+	if i >= len(s.args) || i < 0 {
+		return def
+	}
+	i, err := strconv.Atoi(s.args[i])
+	if err != nil {
+		return def
+	}
+	return i
+}
+
+func (s *strEscape) argString(i int, def string) string {
+	if i >= len(s.args) || i < 0 {
+		return def
+	}
+	return s.args[i]
 }
 
 func (t *Term) handleSTR() {
@@ -39,7 +59,7 @@ func (t *Term) handleSTR() {
 
 	switch s.typ {
 	case ']': // OSC - operating system command
-		switch s.arg(0, 0) {
+		switch d := s.arg(0, 0); d {
 		case 0, 1, 2:
 			title := s.argString(1, "")
 			if title != "" {
@@ -54,7 +74,7 @@ func (t *Term) handleSTR() {
 			// TODO: complain about invalid color, redraw, etc.
 			// setcolorname(s.arg(1, 0), nil)
 		default:
-			// TODO: stderr log
+			t.logf("unknown OSC command %d\n", d)
 			// TODO: s.dump()
 		}
 	case 'k': // old title set compatibility
@@ -65,7 +85,7 @@ func (t *Term) handleSTR() {
 		// '_': // APC - application program command
 		// '^': // PM - privacy message
 
-		// TODO stderr log
+		t.logf("unhandled STR sequence '%c'\n", s.typ)
 		// t.str.dump()
 	}
 }

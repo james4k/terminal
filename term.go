@@ -3,7 +3,9 @@ package terminal
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
+	"os"
 	"unicode"
 )
 
@@ -42,7 +44,7 @@ const (
 	modeHide
 	modeEcho
 	modeAppCursor
-	modeMouseGr
+	modeMouseSgr
 	mode8bit
 	modeBlink
 	modeFBlink
@@ -52,6 +54,7 @@ const (
 	modeMouseMask = modeMouseButton | modeMouseMotion | modeMouseX10 | modeMouseMany
 )
 
+/*
 const (
 	escStart = 1 << iota
 	escCSI
@@ -60,6 +63,7 @@ const (
 	escStrEnd
 	escTest
 )
+*/
 
 type glyph struct {
 	c      rune
@@ -90,19 +94,31 @@ type Term struct {
 	csi           csiEscape
 	numlock       bool
 	tabs          []bool
+
+	Stderr io.Writer // defaults to os.Stderr
 }
 
 func New(columns, rows int) *Term {
 	t := &Term{
 		numlock: true,
 	}
+	t.state = t.parse
+	t.Stderr = os.Stderr
 	t.resize(columns, rows)
 	t.reset()
 	return t
 }
 
+func (t *Term) logf(format string, args ...interface{}) {
+	fmt.Fprintf(t.Stderr, format, args...)
+}
+
+func (t *Term) log(s string) {
+	fmt.Fprintln(t.Stderr, s)
+}
+
 // Write takes pty input that is assumed to be utf8 encoded. Use io.Copy or
-// ReadFrom() for better efficiency.
+// ReadFrom() for better efficiency and simpler usage.
 func (t *Term) Write(p []byte) (int, error) {
 	n, err := t.ReadFrom(bytes.NewReader(p))
 	return int(n), err
@@ -122,8 +138,7 @@ func (t *Term) ReadFrom(r io.Reader) (int64, error) {
 		}
 		written += int64(sz)
 		if c == unicode.ReplacementChar && sz == 1 {
-			// TODO: should we just ignore?
-			// TODO: create a debug log
+			t.log("encountered invalid utf8 sequence")
 			continue
 		}
 		t.put(c)
@@ -133,10 +148,6 @@ func (t *Term) ReadFrom(r io.Reader) (int64, error) {
 
 func (t *Term) put(c rune) {
 	t.state(c)
-
-	if true {
-	}
-
 }
 
 func (t *Term) putTab(forward bool) {
@@ -160,7 +171,7 @@ func (t *Term) putTab(forward bool) {
 func (t *Term) newline(firstCol bool) {
 	y := t.cur.y
 	if y == t.bottom {
-		// TODO: t.scrollUp(t.top, 1)
+		t.scrollUp(t.top, 1)
 	} else {
 		y++
 	}
@@ -213,12 +224,10 @@ func (t *Term) resize(cols, rows int) bool {
 		return false
 	}
 	slide := t.cur.y - rows + 1
-	/*
-		if slide > 0 {
-			copy(t.lines, t.lines[slide:slide+rows])
-			copy(t.altLines, t.altLines[slide:slide+rows])
-		}
-	*/
+	if slide > 0 {
+		copy(t.lines, t.lines[slide:slide+rows])
+		copy(t.altLines, t.altLines[slide:slide+rows])
+	}
 
 	t.lines = make([]line, rows)
 	t.altLines = make([]line, rows)
@@ -276,6 +285,13 @@ func (t *Term) clearAll() {
 	t.clear(0, 0, t.cols-1, t.rows-1)
 }
 
+func (t *Term) moveAbsTo(x, y int) {
+	if t.cur.state&cursorOrigin != 0 {
+		y += t.top
+	}
+	t.moveTo(x, y)
+}
+
 func (t *Term) moveTo(x, y int) {
 	var miny, maxy int
 	if t.cur.state&cursorOrigin != 0 {
@@ -321,4 +337,137 @@ func clamp(val, min, max int) int {
 		return max
 	}
 	return val
+}
+
+func (t *Term) scrollDown(orig, n int) {
+	n = clamp(n, 0, t.bottom-orig+1)
+	t.clear(0, t.bottom-n+1, t.cols-1, t.bottom)
+	for i := t.bottom; i >= orig+n; i-- {
+		t.lines[i], t.lines[i-n] = t.lines[i-n], t.lines[i]
+		t.dirty[i] = true
+		t.dirty[i-n] = true
+	}
+
+	// TODO: selection scroll
+}
+
+func (t *Term) scrollUp(orig, n int) {
+	n = clamp(n, 0, t.bottom-orig+1)
+	t.clear(0, orig, t.cols-1, orig+n-1)
+	for i := orig; i <= t.bottom-n; i++ {
+		t.lines[i], t.lines[i+n] = t.lines[i+n], t.lines[i]
+		t.dirty[i] = true
+		t.dirty[i+n] = true
+	}
+
+	// TODO: selection scroll
+}
+
+func (t *Term) modMode(set bool, bit modeFlags) {
+	if set {
+		t.mode |= bit
+	} else {
+		t.mode &^= bit
+	}
+}
+
+func (t *Term) setMode(priv bool, set bool, args []int) {
+	if priv {
+		for _, a := range args {
+			switch a {
+			case 1: // DECCKM - cursor key
+				t.modMode(set, modeAppCursor)
+			case 5: // DECSCNM - reverse video
+				mode := t.mode
+				t.modMode(set, modeReverse)
+				if mode != t.mode {
+					// TODO: redraw
+				}
+			case 6: // DECOM - origin
+				if set {
+					t.cur.state |= cursorOrigin
+				} else {
+					t.cur.state &^= cursorOrigin
+				}
+				t.moveAbsTo(0, 0)
+			case 7: // DECAWM - auto wrap
+				t.modMode(set, modeWrap)
+			// IGNORED:
+			case 0, // error
+				2,  // DECANM - ANSI/VT52
+				3,  // DECCOLM - column
+				4,  // DECSCLM - scroll
+				8,  // DECARM - auto repeat
+				18, // DECPFF - printer feed
+				19, // DECPEX - printer extent
+				42, // DECNRCM - national characters
+				12: // att610 - start blinking cursor
+				break
+			case 9: // X10 mouse compatibility mode
+				t.modMode(false, modeMouseMask)
+				t.modMode(set, modeMouseX10)
+			case 1000: // report button press
+				t.modMode(false, modeMouseMask)
+				t.modMode(set, modeMouseButton)
+			case 1002: // report motion on button press
+				t.modMode(false, modeMouseMask)
+				t.modMode(set, modeMouseMotion)
+			case 1003: // enable all mouse motions
+				t.modMode(false, modeMouseMask)
+				t.modMode(set, modeMouseMany)
+			case 1004: // send focus events to tty
+				t.modMode(set, modeFocus)
+			case 1006: // extended reporting mode
+				t.modMode(set, modeMouseSgr)
+			case 1034:
+				t.modMode(set, mode8bit)
+			case 1049, // = 1047 and 1048
+				47, 1047:
+				alt := t.mode&modeAltScreen != 0
+				if alt {
+					t.clear(0, 0, t.cols-1, t.rows-1)
+				}
+				if !set || !alt {
+					t.swapScreen()
+				}
+				if a != 1049 {
+					break
+				}
+				fallthrough
+			case 1048:
+				if set {
+					t.saveCursor()
+				} else {
+					t.restoreCursor()
+				}
+			case 1001:
+				// mouse highlight mode; can hang the terminal by design when
+				// implemented
+			case 1005:
+				// utf8 mouse mode; will confuse applications not supporting
+				// utf8 and luit
+			case 1015:
+				// urxvt mangled mouse mode; incompatiblt and can be mistaken
+				// for other control codes
+			default:
+				t.logf("unknown private set/reset mode %d\n", a)
+			}
+		}
+	} else {
+		for _, a := range args {
+			switch a {
+			case 0: // Error (ignored)
+			case 2: // KAM - keyboard action
+				t.modMode(set, modeKeyboardLock)
+			case 4: // IRM - insertion-replacement
+				t.modMode(set, modeInsert)
+			case 12: // SRM - send/receive
+				t.modMode(set, modeEcho)
+			case 20: // LNM - linefeed/newline
+				t.modMode(set, modeCRLF)
+			default:
+				t.logf("unknown set/reset mode %d\n", a)
+			}
+		}
+	}
 }

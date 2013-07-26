@@ -28,22 +28,23 @@ func (c *csiEscape) put(b byte) bool {
 	return false
 }
 
-// TODO: make parsing lazy via arg() method? many codes don't need the string
-// conversion and integer parsing
 func (c *csiEscape) parse() {
+	c.mode = c.buf[len(c.buf)-1]
+	if len(c.buf) == 1 {
+		return
+	}
 	s := string(c.buf)
 	c.args = c.args[:0]
 	if s[0] == '?' {
 		c.priv = true
 		s = s[1:]
 	}
-	c.mode = s[len(s)-1]
 	s = s[:len(s)-1]
 	ss := strings.Split(s, ";")
 	for _, p := range ss {
 		i, err := strconv.Atoi(p)
 		if err != nil {
-			// TODO: log to stderr
+			//t.logf("invalid CSI arg '%s'\n", p)
 			break
 		}
 		c.args = append(c.args, i)
@@ -145,7 +146,7 @@ func (t *Term) handleCSI() {
 	case 'L': // IL - insert <n> blank lines
 		// TODO: t.insertBlankLines(c.arg(0, 1))
 	case 'l': // RM - reset mode
-		// TODO: tsetmode(c.priv, 0, c.args)
+		t.setMode(c.priv, false, c.args)
 	case 'M': // DL - delete <n> lines
 		// TODO: t.deleteLines(c.arg(0, 1))
 	case 'X': // ECH - erase <n> chars
@@ -161,9 +162,9 @@ func (t *Term) handleCSI() {
 			}
 		*/
 	case 'd': // VPA - move to <row>
-		// TODO: t.moveAbsTo(t.cur.x, c.arg(0, 1)-1)
+		t.moveAbsTo(t.cur.x, c.arg(0, 1)-1)
 	case 'h': // SM - set terminal mode
-		// TODO: tsetmode(c.priv, 1, c.args)
+		t.setMode(c.priv, true, c.args)
 	case 'm': // SGR - terminal attribute (color)
 		// TODO: tsetattr(c.args)
 	case 'r': // DECSTBM - set scrolling region
@@ -183,6 +184,6 @@ func (t *Term) handleCSI() {
 	}
 	return
 unknown: // TODO: get rid of this goto
-	// TODO: log to stderr
+	t.logf("unknown CSI sequence '%c'\n", c)
 	// TODO: c.dump()
 }
