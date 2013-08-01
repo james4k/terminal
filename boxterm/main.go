@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"io/ioutil"
 	//"math/rand"
 	"os"
 	"os/exec"
@@ -38,6 +39,51 @@ func filterESC(r io.Reader) io.Reader {
 	return pr
 }
 
+func update(term *terminal.Term) {
+	w, h := 80, 24
+	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
+	for i := 0; i < h+2; i++ {
+		termbox.SetCell(0, i, '│', termbox.ColorDefault, termbox.ColorDefault)
+		termbox.SetCell(w+1, i, '│', termbox.ColorDefault, termbox.ColorDefault)
+	}
+	for i := 0; i < w+2; i++ {
+		termbox.SetCell(i, 0, '─', termbox.ColorDefault, termbox.ColorDefault)
+		termbox.SetCell(i, h+1, '─', termbox.ColorDefault, termbox.ColorDefault)
+	}
+	termbox.SetCell(0, 0, '┌', termbox.ColorDefault, termbox.ColorDefault)
+	termbox.SetCell(w+1, 0, '┐', termbox.ColorDefault, termbox.ColorDefault)
+	termbox.SetCell(w+1, h+1, '┘', termbox.ColorDefault, termbox.ColorDefault)
+	termbox.SetCell(0, h+1, '└', termbox.ColorDefault, termbox.ColorDefault)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			c, fg, bg := term.Cell(x, y)
+			/*
+				// termbox only supports 8 colors
+				if fg > 15 {
+					fg = 7
+				} else if fg > 7 {
+					fg -= 8
+				}
+				if bg > 15 {
+					bg = 0
+				} else if bg > 7 {
+					bg -= 8
+				}
+			*/
+			fg = 6 // colors are an issue for later; just keep it monocolored for now
+			bg = 0
+			termbox.SetCell(x+1, y+1, c,
+				termbox.Attribute(fg+1),
+				termbox.Attribute(bg+1))
+		}
+	}
+	curx, cury := term.Cursor()
+	curx += 1
+	cury += 1
+	termbox.SetCursor(curx, cury)
+	termbox.Flush()
+}
+
 func main() {
 	// NOTE: This must be before termbox.Init(). On OSX, at least, we get a
 	// kernel panic if we termbox.Init() first! But, only when the process is
@@ -56,6 +102,8 @@ func main() {
 	defer termbox.Close()
 
 	term := terminal.New(80, 24, f)
+	term.Stderr = ioutil.Discard
+	// TODO: separate window for the log output
 	term.Write([]byte("boxterm - debug frontend\r\n"))
 
 	endc := make(chan bool)
@@ -69,7 +117,6 @@ func main() {
 		if err != nil && err != io.EOF {
 			fmt.Fprintln(os.Stderr, err)
 		}
-		fmt.Fprintln(os.Stderr, "end")
 		close(endc)
 	}()
 
@@ -82,58 +129,22 @@ func main() {
 		io.Copy(f, os.Stdin)
 	}()
 
+	eventc := make(chan termbox.Event, 4)
+	go func() {
+		for {
+			eventc <- termbox.PollEvent()
+		}
+	}()
+
 	tickc := time.Tick(50 * time.Millisecond)
-
 	for {
-		w, h := 80, 24
-		termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
-		for i := 0; i < h+2; i++ {
-			termbox.SetCell(0, i, '│', termbox.ColorDefault, termbox.ColorDefault)
-			termbox.SetCell(w+1, i, '│', termbox.ColorDefault, termbox.ColorDefault)
-		}
-		for i := 0; i < w+2; i++ {
-			termbox.SetCell(i, 0, '─', termbox.ColorDefault, termbox.ColorDefault)
-			termbox.SetCell(i, h+1, '─', termbox.ColorDefault, termbox.ColorDefault)
-		}
-		termbox.SetCell(0, 0, '┌', termbox.ColorDefault, termbox.ColorDefault)
-		termbox.SetCell(w+1, 0, '┐', termbox.ColorDefault, termbox.ColorDefault)
-		termbox.SetCell(w+1, h+1, '┘', termbox.ColorDefault, termbox.ColorDefault)
-		termbox.SetCell(0, h+1, '└', termbox.ColorDefault, termbox.ColorDefault)
-		for y := 0; y < h; y++ {
-			for x := 0; x < w; x++ {
-				c, fg, bg := term.Cell(x, y)
-				/*
-					// termbox only supports 8 colors
-					if fg > 15 {
-						fg = 7
-					} else if fg > 7 {
-						fg -= 8
-					}
-					if bg > 15 {
-						bg = 0
-					} else if bg > 7 {
-						bg -= 8
-					}
-				*/
-				fg = 6 // colors are an issue for later; just keep it monocolored for now
-				bg = 0
-				termbox.SetCell(x+1, y+1, c,
-					termbox.Attribute(fg+1),
-					termbox.Attribute(bg+1))
-			}
-		}
-		curx, cury := term.Cursor()
-		curx += 1
-		cury += 1
-		termbox.SetCursor(curx, cury)
-		termbox.Flush()
-
 		select {
+		case <-eventc:
+			break // just consume these for now
 		case <-endc:
-			fmt.Fprintln(os.Stderr, "return")
 			return
 		case <-tickc:
-			break
+			update(term)
 		}
 	}
 }

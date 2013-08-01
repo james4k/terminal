@@ -142,7 +142,7 @@ func (t *Term) ReadFrom(r io.Reader) (int64, error) {
 		}
 		written += int64(sz)
 		if c == unicode.ReplacementChar && sz == 1 {
-			t.log("encountered invalid utf8 sequence")
+			t.log("invalid utf8 sequence")
 			continue
 		}
 		t.put(c)
@@ -230,6 +230,9 @@ func (t *Term) resize(cols, rows int) bool {
 	if cols < 1 || rows < 1 {
 		return false
 	}
+	if cols == t.cols && rows == t.rows {
+		return false
+	}
 	slide := t.cur.y - rows + 1
 	if slide > 0 {
 		copy(t.lines, t.lines[slide:slide+rows])
@@ -257,11 +260,9 @@ func (t *Term) resize(cols, rows int) bool {
 	t.rows = rows
 	t.setScroll(0, rows-1)
 	t.moveTo(t.cur.x, t.cur.y)
-	// TODO: clear alt screen
-	// TODO: clear screen (only appropriate rows/cols)
+	// TODO: clear (alt) screen (only appropriate rows/cols)
 	// TODO: tty resize via ioctl
 	t.ttyResize()
-	t.log("resize")
 	return slide > 0
 }
 
@@ -449,10 +450,8 @@ func (t *Term) setMode(priv bool, set bool, args []int) {
 				if alt {
 					t.clear(0, 0, t.cols-1, t.rows-1)
 				}
-				t.log("alt screen...")
 				if !set || !alt {
 					t.swapScreen()
-					t.log("swapped screen")
 				}
 				if a != 1049 {
 					break
