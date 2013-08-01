@@ -39,8 +39,7 @@ func filterESC(r io.Reader) io.Reader {
 	return pr
 }
 
-func update(term *terminal.Term) {
-	w, h := 80, 24
+func update(term *terminal.Term, w, h int) {
 	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
 	for i := 0; i < h+2; i++ {
 		termbox.SetCell(0, i, '│', termbox.ColorDefault, termbox.ColorDefault)
@@ -100,8 +99,9 @@ func main() {
 		panic(err)
 	}
 	defer termbox.Close()
+	wide, tall := termbox.Size()
 
-	term := terminal.New(80, 24, f)
+	term := terminal.New(wide-2, tall-2, f)
 	term.Stderr = ioutil.Discard
 	// TODO: separate window for the log output
 	term.Write([]byte("boxterm - debug frontend\r\n"))
@@ -139,12 +139,16 @@ func main() {
 	tickc := time.Tick(50 * time.Millisecond)
 	for {
 		select {
-		case <-eventc:
-			break // just consume these for now
+		case ev := <-eventc:
+			if ev.Type == termbox.EventResize {
+				wide = ev.Width
+				tall = ev.Height
+				term.Resize(wide-2, tall-2)
+			}
 		case <-endc:
 			return
 		case <-tickc:
-			update(term)
+			update(term, wide-2, tall-2)
 		}
 	}
 }
