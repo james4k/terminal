@@ -99,7 +99,7 @@ func New(columns, rows int, pty *os.File) *Term {
 	}
 	t.state = t.parse
 	t.Stderr = os.Stderr
-	t.resize(columns, rows)
+	t.Resize(columns, rows)
 	t.reset()
 	return t
 }
@@ -226,7 +226,7 @@ func (t *Term) reset() {
 }
 
 // TODO: definitely can improve allocs
-func (t *Term) resize(cols, rows int) bool {
+func (t *Term) Resize(cols, rows int) bool {
 	if cols < 1 || rows < 1 {
 		return false
 	}
