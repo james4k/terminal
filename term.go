@@ -10,17 +10,21 @@ import (
 )
 
 const (
-	tabspaces = 8 // probably a better way to do this
+	tabspaces = 8
+
+	defaultfg = 7
+	defaultbg = 0
+	defaultcs = 256
 )
 
 const (
-	glyphAttrReverse = 1 << iota
-	glyphAttrUnderline
-	glyphAttrBold
-	glyphAttrGfx
-	glyphAttrItalic
-	glyphAttrBlink
-	glyphAttrWrap
+	attrReverse = 1 << iota
+	attrUnderline
+	attrBold
+	attrGfx
+	attrItalic
+	attrBlink
+	attrWrap
 )
 
 const (
@@ -54,17 +58,6 @@ const (
 	modeMouseMask = modeMouseButton | modeMouseMotion | modeMouseX10 | modeMouseMany
 )
 
-/*
-const (
-	escStart = 1 << iota
-	escCSI
-	escStr
-	escAltCharset
-	escStrEnd
-	escTest
-)
-*/
-
 type glyph struct {
 	c      rune
 	mode   int16
@@ -94,13 +87,15 @@ type Term struct {
 	csi           csiEscape
 	numlock       bool
 	tabs          []bool
+	pty           *os.File
 
 	Stderr io.Writer // defaults to os.Stderr
 }
 
-func New(columns, rows int) *Term {
+func New(columns, rows int, pty *os.File) *Term {
 	t := &Term{
 		numlock: true,
+		pty:     pty,
 	}
 	t.state = t.parse
 	t.Stderr = os.Stderr
@@ -117,9 +112,18 @@ func (t *Term) log(s string) {
 	fmt.Fprintln(t.Stderr, s)
 }
 
+func (t *Term) Cell(x, y int) (rune, uint16, uint16) {
+	return t.lines[y][x].c, t.lines[y][x].fg, t.lines[y][x].bg
+}
+
+func (t *Term) Cursor() (int, int) {
+	return t.cur.x, t.cur.y
+}
+
 // Write takes pty input that is assumed to be utf8 encoded. Use io.Copy or
 // ReadFrom() for better efficiency and simpler usage.
 func (t *Term) Write(p []byte) (int, error) {
+	// FIXME: The bufio.NewReader() call in ReadFrom has a sizeable alloc
 	n, err := t.ReadFrom(bytes.NewReader(p))
 	return int(n), err
 }
@@ -195,7 +199,7 @@ var gfxCharTable = [62]rune{
 }
 
 func (t *Term) setChar(c rune, attr *glyph, x, y int) {
-	if attr.mode&glyphAttrGfx != 0 {
+	if attr.mode&attrGfx != 0 {
 		if c >= 0x41 && c <= 0x7e && gfxCharTable[c-0x41] != 0 {
 			c = gfxCharTable[c-0x41]
 		}
@@ -209,6 +213,9 @@ func (t *Term) reset() {
 	t.cur = cursor{}
 	for i := range t.tabs {
 		t.tabs[i] = false
+	}
+	for i := tabspaces; i < len(t.tabs); i += tabspaces {
+		t.tabs[i] = true
 	}
 	t.top = 0
 	t.bottom = t.rows - 1
@@ -232,23 +239,29 @@ func (t *Term) resize(cols, rows int) bool {
 	t.lines = make([]line, rows)
 	t.altLines = make([]line, rows)
 	t.dirty = make([]bool, rows)
-	t.tabs = make([]bool, rows)
+	t.tabs = make([]bool, cols)
 
 	for i := 0; i < rows; i++ {
 		t.dirty[i] = true
 		t.lines[i] = make(line, cols)
 		t.altLines[i] = make(line, cols)
 	}
-	// TODO: update tabs? wtf is the tabs thign for anyways, a lookup table for
-	// something?
+	for i := range t.tabs {
+		t.tabs[i] = false
+	}
+	for i := tabspaces; i < len(t.tabs); i += tabspaces {
+		t.tabs[i] = true
+	}
 
 	t.cols = cols
 	t.rows = rows
 	t.setScroll(0, rows-1)
 	t.moveTo(t.cur.x, t.cur.y)
-	t.clearAll()
-	// TODO: reset t.tabs
+	// TODO: clear alt screen
+	// TODO: clear screen (only appropriate rows/cols)
 	// TODO: tty resize via ioctl
+	t.ttyResize()
+	t.log("resize")
 	return slide > 0
 }
 
@@ -339,6 +352,13 @@ func clamp(val, min, max int) int {
 	return val
 }
 
+func between(val, min, max int) bool {
+	if val < min || val > max {
+		return false
+	}
+	return true
+}
+
 func (t *Term) scrollDown(orig, n int) {
 	n = clamp(n, 0, t.bottom-orig+1)
 	t.clear(0, t.bottom-n+1, t.cols-1, t.bottom)
@@ -403,6 +423,8 @@ func (t *Term) setMode(priv bool, set bool, args []int) {
 				42, // DECNRCM - national characters
 				12: // att610 - start blinking cursor
 				break
+			case 25: // DECTCEM - text cursor enable mode
+				t.modMode(!set, modeHide)
 			case 9: // X10 mouse compatibility mode
 				t.modMode(false, modeMouseMask)
 				t.modMode(set, modeMouseX10)
@@ -427,8 +449,10 @@ func (t *Term) setMode(priv bool, set bool, args []int) {
 				if alt {
 					t.clear(0, 0, t.cols-1, t.rows-1)
 				}
+				t.log("alt screen...")
 				if !set || !alt {
 					t.swapScreen()
+					t.log("swapped screen")
 				}
 				if a != 1049 {
 					break
@@ -469,5 +493,117 @@ func (t *Term) setMode(priv bool, set bool, args []int) {
 				t.logf("unknown set/reset mode %d\n", a)
 			}
 		}
+	}
+}
+
+func (t *Term) setAttr(attr []int) {
+	for i := 0; i < len(attr); i++ {
+		a := attr[i]
+		switch a {
+		case 0:
+			t.cur.attr.mode &^= attrReverse | attrUnderline | attrBold | attrItalic | attrBlink
+			t.cur.attr.fg = defaultfg
+			t.cur.attr.bg = defaultbg
+		case 1:
+			t.cur.attr.mode |= attrBold
+		case 3:
+			t.cur.attr.mode |= attrItalic
+		case 4:
+			t.cur.attr.mode |= attrUnderline
+		case 5, 6: // slow, rapid blink
+			t.cur.attr.mode |= attrBlink
+		case 7:
+			t.cur.attr.mode |= attrReverse
+		case 21, 22:
+			t.cur.attr.mode &^= attrBold
+		case 23:
+			t.cur.attr.mode &^= attrItalic
+		case 24:
+			t.cur.attr.mode &^= attrUnderline
+		case 25, 26:
+			t.cur.attr.mode &^= attrBlink
+		case 27:
+			t.cur.attr.mode &^= attrReverse
+		case 38:
+			if i+2 < len(attr) && attr[i+1] == 5 {
+				i += 2
+				if between(attr[i], 0, 255) {
+					t.cur.attr.fg = uint16(attr[i])
+				} else {
+					t.logf("bad fgcolor %d\n", attr[i])
+				}
+			} else {
+				t.logf("gfx attr %d unknown\n", a)
+			}
+		case 39:
+			t.cur.attr.fg = defaultfg
+		case 48:
+			if i+2 < len(attr) && attr[i+1] == 5 {
+				i += 2
+				if between(attr[i], 0, 255) {
+					t.cur.attr.bg = uint16(attr[i])
+				} else {
+					t.logf("bad bgcolor %d\n", attr[i])
+				}
+			} else {
+				t.logf("gfx attr %d unknown\n", a)
+			}
+		case 49:
+			t.cur.attr.bg = defaultbg
+		default:
+			if between(a, 30, 37) {
+				t.cur.attr.fg = uint16(a - 30)
+			} else if between(a, 40, 47) {
+				t.cur.attr.bg = uint16(a - 40)
+			} else if between(a, 90, 97) {
+				t.cur.attr.fg = uint16(a - 90 + 8)
+			} else if between(a, 100, 107) {
+				t.cur.attr.bg = uint16(a - 100 + 8)
+			} else {
+				t.logf("gfx attr %d unknown\n", a)
+			}
+		}
+	}
+}
+
+func (t *Term) insertBlanks(n int) {
+	src := t.cur.x
+	dst := src + n
+	size := t.cols - dst
+	t.dirty[t.cur.y] = true
+
+	if dst >= t.cols {
+		t.clear(t.cur.x, t.cur.y, t.cols-1, t.cur.y)
+	} else {
+		copy(t.lines[t.cur.y][dst:dst+size], t.lines[t.cur.y][src:src+size])
+		t.clear(src, t.cur.y, dst-1, t.cur.y)
+	}
+}
+
+func (t *Term) insertBlankLines(n int) {
+	if t.cur.y < t.top || t.cur.y > t.bottom {
+		return
+	}
+	t.scrollDown(t.cur.y, n)
+}
+
+func (t *Term) deleteLines(n int) {
+	if t.cur.y < t.top || t.cur.y > t.bottom {
+		return
+	}
+	t.scrollUp(t.cur.y, n)
+}
+
+func (t *Term) deleteChars(n int) {
+	src := t.cur.x + n
+	dst := t.cur.x
+	size := t.cols - src
+	t.dirty[t.cur.y] = true
+
+	if src >= t.cols {
+		t.clear(t.cur.x, t.cur.y, t.cols-1, t.cur.y)
+	} else {
+		copy(t.lines[t.cur.y][dst:dst+size], t.lines[t.cur.y][src:src+size])
+		t.clear(t.cols-n, t.cur.y, t.cols-1, t.cur.y)
 	}
 }

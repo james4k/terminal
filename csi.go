@@ -17,6 +17,8 @@ type csiEscape struct {
 func (c *csiEscape) reset() {
 	c.buf = c.buf[:0]
 	c.args = c.args[:0]
+	c.mode = 0
+	c.priv = false
 }
 
 func (c *csiEscape) put(b byte) bool {
@@ -64,126 +66,111 @@ func (t *Term) handleCSI() {
 	default:
 		goto unknown
 	case '@': // ICH - insert <n> blank char
-		// TODO: t.insertBlank(c.arg(0, 1))
+		t.insertBlanks(c.arg(0, 1))
 	case 'A': // CUU - cursor <n> up
-		// TODO: t.moveTo(t.cur.x, t.cur.y - c.arg(0, 1))
+		t.moveTo(t.cur.x, t.cur.y-c.arg(0, 1))
 	case 'B', 'e': // CUD, VPR - cursor <n> down
-		// TODO: t.moveTo(t.cur.x, t.cur.y + c.arg(0, 1))
+		t.moveTo(t.cur.x, t.cur.y+c.arg(0, 1))
 	case 'c': // DA - device attributes
 		if c.arg(0, 0) == 0 {
 			// TODO: write vt102 id
 		}
 	case 'C', 'a': // CUF, HPR - cursor <n> forward
-		// TODO: t.moveTo(t.cur.x + c.arg(0, 1), t.cur.y)
+		t.moveTo(t.cur.x+c.arg(0, 1), t.cur.y)
 	case 'D': // CUB - cursor <n> backward
-		// TODO: t.moveTo(t.cur.x - c.arg(0, 1), t.cur.y)
+		t.moveTo(t.cur.x-c.arg(0, 1), t.cur.y)
 	case 'E': // CNL - cursor <n> down and first col
-		// TODO: t.moveTo(0, t.cur.y + c.arg(0, 1))
+		t.moveTo(0, t.cur.y+c.arg(0, 1))
 	case 'F': // CPL - cursor <n> up and first col
-		// TODO: t.moveTo(0, t.cur.y - c.arg(0, 1))
+		t.moveTo(0, t.cur.y-c.arg(0, 1))
 	case 'g': // TBC - tabulation clear
 		switch c.arg(0, 0) {
 		// clear current tab stop
 		case 0:
-			// TODO: t.tabs[t.cur.x] = false
+			t.tabs[t.cur.x] = false
 		// clear all tabs
 		case 3:
-			/*
-				// TODO:
-				for i := range t.tabs {
-					t.tabs = false
-				}
-			*/
+			for i := range t.tabs {
+				t.tabs[i] = false
+			}
 		default:
 			goto unknown
 		}
 	case 'G', '`': // CHA, HPA - Move to <col>
-		// TODO: t.moveTo(c.arg(0, 1) - 1, t.cur.y)
+		t.moveTo(c.arg(0, 1)-1, t.cur.y)
 	case 'H', 'f': // CUP, HVP - move to <row> <col>
-		// TODO: t.moveAbsTo(c.arg(1, 1) - 1, c.arg(0, 1) - 1)
+		t.moveAbsTo(c.arg(1, 1)-1, c.arg(0, 1)-1)
 	case 'I': // CHT - cursor forward tabulation <n> tab stops
 		n := c.arg(0, 1)
 		for i := 0; i < n; i++ {
-			// TODO: t.putTab(1)
+			t.putTab(true)
 		}
 	case 'J': // ED - clear screen
 		// TODO: sel.ob.x = -1
 		switch c.arg(0, 0) {
 		case 0: // below
-			// TODO:
-			/*
-				t.clear(t.cur.x, t.cur.y, t.cols-1, t.cur.y)
-				if t.cur.y < t.rows - 1 {
-					t.clear(0, t.cur.y+1, t.cols-1, t.rows-1)
-				}
-			*/
+			t.clear(t.cur.x, t.cur.y, t.cols-1, t.cur.y)
+			if t.cur.y < t.rows-1 {
+				t.clear(0, t.cur.y+1, t.cols-1, t.rows-1)
+			}
 		case 1: // above
-			// TODO:
-			/*
-				if t.cur.y > 1 {
-					t.clear(0, 0, t.cols-1, t.cur.y-1)
-				}
-				t.clear(0, t.cur.y, t.cur.x, t.cur.y)
-			*/
+			if t.cur.y > 1 {
+				t.clear(0, 0, t.cols-1, t.cur.y-1)
+			}
+			t.clear(0, t.cur.y, t.cur.x, t.cur.y)
 		case 2: // all
-			// TODO: t.clear(0, 0, t.cols-1, t.rows-1)
+			t.clear(0, 0, t.cols-1, t.rows-1)
 		default:
 			goto unknown
 		}
 	case 'K': // EL - clear line
 		switch c.arg(0, 0) {
 		case 0: // right
-			// TODO: t.clear(t.cur.x, t.cur.y, t.cols-1, t.cur.y)
+			t.clear(t.cur.x, t.cur.y, t.cols-1, t.cur.y)
 		case 1: // left
-			// TODO: t.clear(0, t.cur.y, t.cur.x, t.cur.y)
+			t.clear(0, t.cur.y, t.cur.x, t.cur.y)
 		case 2: // all
-			// TODO: t.clear(0, t.cur.y, t.cols-1, t.cur.y)
+			t.clear(0, t.cur.y, t.cols-1, t.cur.y)
 		}
 	case 'S': // SU - scroll <n> lines up
-		// TODO: t.scrollUp(t.top, c.arg(0, 1))
+		t.scrollUp(t.top, c.arg(0, 1))
 	case 'T': // SD - scroll <n> lines down
-		// TODO: t.scrollDown(t.top, c.arg(0, 1))
+		t.scrollDown(t.top, c.arg(0, 1))
 	case 'L': // IL - insert <n> blank lines
-		// TODO: t.insertBlankLines(c.arg(0, 1))
+		t.insertBlankLines(c.arg(0, 1))
 	case 'l': // RM - reset mode
 		t.setMode(c.priv, false, c.args)
 	case 'M': // DL - delete <n> lines
-		// TODO: t.deleteLines(c.arg(0, 1))
+		t.deleteLines(c.arg(0, 1))
 	case 'X': // ECH - erase <n> chars
-		// TODO: t.clear(t.cur.x, t.cur.y, t.cur.x+c.arg(0, 1)-1, t.cur.y)
+		t.clear(t.cur.x, t.cur.y, t.cur.x+c.arg(0, 1)-1, t.cur.y)
 	case 'P': // DCH - delete <n> chars
-		// TODO: t.deleteChars(c.arg(0, 1))
+		t.deleteChars(c.arg(0, 1))
 	case 'Z': // CBT - cursor backward tabulation <n> tab stops
-		// TODO:
-		/*
-			n := c.arg(0, 1)
-			for i := 0; i < n; n++ {
-				t.putTab(false)
-			}
-		*/
+		n := c.arg(0, 1)
+		for i := 0; i < n; n++ {
+			t.putTab(false)
+		}
 	case 'd': // VPA - move to <row>
 		t.moveAbsTo(t.cur.x, c.arg(0, 1)-1)
 	case 'h': // SM - set terminal mode
 		t.setMode(c.priv, true, c.args)
 	case 'm': // SGR - terminal attribute (color)
-		// TODO: tsetattr(c.args)
+		t.setAttr(c.args)
 	case 'r': // DECSTBM - set scrolling region
-		// TODO:
-		/*
-			if c.priv {
-				goto unknown
-			} else {
-				t.setScroll(c.arg(0, 1)-1, c.arg(1, t.rows)-1)
-				t.moveAbsTo(0, 0)
-			}
-		*/
+		if c.priv {
+			goto unknown
+		} else {
+			t.setScroll(c.arg(0, 1)-1, c.arg(1, t.rows)-1)
+			t.moveAbsTo(0, 0)
+		}
 	case 's': // DECSC - save cursor position (ANSI.SYS)
-		// TODO: t.saveCursor()
+		t.saveCursor()
 	case 'u': // DECRC - restore cursor position (ANSI.SYS)
-		// TODO: t.loadCursor()
+		t.restoreCursor()
 	}
 	return
 unknown: // TODO: get rid of this goto
-	t.logf("unknown CSI sequence '%c'\n", c)
+	t.logf("unknown CSI sequence '%c'\n", c.mode)
 	// TODO: c.dump()
 }

@@ -15,7 +15,7 @@ func extractStr(t *Term, x0, x1, row int) string {
 }
 
 func TestPlainChars(t *testing.T) {
-	term := New(80, 24)
+	term := New(80, 24, nil)
 	expected := "Hello world!"
 	_, err := term.Write([]byte(expected))
 	if err != nil && err != io.EOF {
@@ -28,9 +28,9 @@ func TestPlainChars(t *testing.T) {
 }
 
 func TestNewline(t *testing.T) {
-	term := New(80, 24)
+	term := New(80, 24, nil)
 	expected := "Hello world!\n...and more."
-	_, err := term.Write([]byte("\033[20h"))
+	_, err := term.Write([]byte("\033[20h")) // set CRLF mode
 	if err != nil && err != io.EOF {
 		t.Fatal(err)
 	}
