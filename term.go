@@ -120,6 +120,10 @@ func (t *Term) Cursor() (int, int) {
 	return t.cur.x, t.cur.y
 }
 
+func (t *Term) CursorHidden() bool {
+	return t.mode&modeHide != 0
+}
+
 // Write takes pty input that is assumed to be utf8 encoded. Use io.Copy or
 // ReadFrom() for better efficiency and simpler usage.
 func (t *Term) Write(p []byte) (int, error) {

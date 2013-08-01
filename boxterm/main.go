@@ -76,10 +76,14 @@ func update(term *terminal.Term, w, h int) {
 				termbox.Attribute(bg+1))
 		}
 	}
-	curx, cury := term.Cursor()
-	curx += 1
-	cury += 1
-	termbox.SetCursor(curx, cury)
+	if term.CursorHidden() {
+		termbox.SetCursor(-1, -1)
+	} else {
+		curx, cury := term.Cursor()
+		curx += 1
+		cury += 1
+		termbox.SetCursor(curx, cury)
+	}
 	termbox.Flush()
 }
 
