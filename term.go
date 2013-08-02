@@ -231,10 +231,10 @@ func (t *Term) reset() {
 
 // TODO: definitely can improve allocs
 func (t *Term) Resize(cols, rows int) bool {
-	if cols < 1 || rows < 1 {
+	if cols == t.cols && rows == t.rows {
 		return false
 	}
-	if cols == t.cols && rows == t.rows {
+	if cols < 1 || rows < 1 {
 		return false
 	}
 	slide := t.cur.y - rows + 1
@@ -243,29 +243,48 @@ func (t *Term) Resize(cols, rows int) bool {
 		copy(t.altLines, t.altLines[slide:slide+rows])
 	}
 
+	lines, altLines, tabs := t.lines, t.altLines, t.tabs
 	t.lines = make([]line, rows)
 	t.altLines = make([]line, rows)
 	t.dirty = make([]bool, rows)
 	t.tabs = make([]bool, cols)
 
+	minrows := min(rows, t.rows)
+	mincols := min(cols, t.cols)
 	for i := 0; i < rows; i++ {
 		t.dirty[i] = true
 		t.lines[i] = make(line, cols)
 		t.altLines[i] = make(line, cols)
 	}
-	for i := range t.tabs {
-		t.tabs[i] = false
+	for i := 0; i < minrows; i++ {
+		copy(t.lines[i], lines[i])
+		copy(t.altLines[i], altLines[i])
 	}
-	for i := tabspaces; i < len(t.tabs); i += tabspaces {
-		t.tabs[i] = true
+	copy(t.tabs, tabs)
+	if cols > t.cols {
+		i := t.cols - 1
+		for i > 0 && !tabs[i] {
+			i--
+		}
+		for i += tabspaces; i < len(tabs); i += tabspaces {
+			tabs[i] = true
+		}
 	}
 
 	t.cols = cols
 	t.rows = rows
 	t.setScroll(0, rows-1)
 	t.moveTo(t.cur.x, t.cur.y)
-	// TODO: clear (alt) screen (only appropriate rows/cols)
-	// TODO: tty resize via ioctl
+	for i := 0; i < 2; i++ {
+		if mincols < cols && minrows > 0 {
+			t.clear(mincols, 0, cols-1, minrows-1)
+		}
+		if cols > 0 && minrows < rows {
+			t.clear(0, minrows, cols-1, rows-1)
+		}
+		t.swapScreen()
+	}
+
 	t.ttyResize()
 	return slide > 0
 }
@@ -346,6 +365,13 @@ func (t *Term) setScroll(top, bottom int) {
 	}
 	t.top = top
 	t.bottom = bottom
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func clamp(val, min, max int) int {
