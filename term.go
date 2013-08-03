@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"unicode"
 )
 
@@ -88,6 +89,7 @@ type Term struct {
 	numlock       bool
 	tabs          []bool
 	pty           *os.File
+	mu            sync.RWMutex // for now, this protects everything
 
 	Stderr io.Writer // defaults to os.Stderr
 }
@@ -113,31 +115,59 @@ func (t *Term) log(s string) {
 }
 
 func (t *Term) Cell(x, y int) (rune, uint16, uint16) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return t.lines[y][x].c, t.lines[y][x].fg, t.lines[y][x].bg
 }
 
 func (t *Term) Cursor() (int, int) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return t.cur.x, t.cur.y
 }
 
 func (t *Term) CursorHidden() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return t.mode&modeHide != 0
 }
 
-// Write takes pty input that is assumed to be utf8 encoded. Use io.Copy or
-// ReadFrom() for better efficiency and simpler usage.
+// Write takes pty input that is assumed to be utf8 encoded.
 func (t *Term) Write(p []byte) (int, error) {
-	// FIXME: The bufio.NewReader() call in ReadFrom has a sizeable alloc
-	n, err := t.ReadFrom(bytes.NewReader(p))
-	return int(n), err
+	var written int
+	r := bytes.NewReader(p)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for {
+		c, sz, err := r.ReadRune()
+		if err != nil {
+			return written, err
+		}
+		written += sz
+		if c == unicode.ReplacementChar && sz == 1 {
+			if r.Len() == 0 {
+				// not enough bytes for a full rune
+				return written - 1, nil
+			} else {
+				t.log("invalid utf8 sequence")
+				continue
+			}
+		}
+		t.put(c)
+	}
+	return written, nil
 }
 
 // ReadFrom reads from r until EOF or error. r is a pty file in the common
 // case.
 func (t *Term) ReadFrom(r io.Reader) (int64, error) {
-	// FIXME: does it make sense to record bytes written? ATM just doing this
-	// to conform to io.ReaderFrom
 	var written int64
+	var lockn int // put calls per mutex lock
+	defer func() {
+		if lockn > 0 {
+			t.mu.Unlock()
+		}
+	}()
 	buf := bufio.NewReader(r)
 	for {
 		c, sz, err := buf.ReadRune()
@@ -149,7 +179,17 @@ func (t *Term) ReadFrom(r io.Reader) (int64, error) {
 			t.log("invalid utf8 sequence")
 			continue
 		}
+		if lockn == 0 {
+			t.mu.Lock()
+		}
 		t.put(c)
+		lockn++
+		if buf.Buffered() == 0 || lockn > 1024 {
+			// unlock if there's nothing else buffered or if we've been
+			// locked for a fair amount of work
+			t.mu.Unlock()
+			lockn = 0
+		}
 	}
 	return written, nil
 }
@@ -231,6 +271,8 @@ func (t *Term) reset() {
 
 // TODO: definitely can improve allocs
 func (t *Term) Resize(cols, rows int) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if cols == t.cols && rows == t.rows {
 		return false
 	}
