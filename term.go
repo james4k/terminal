@@ -184,9 +184,9 @@ func (t *Term) ReadFrom(r io.Reader) (int64, error) {
 		}
 		t.put(c)
 		lockn++
-		if buf.Buffered() == 0 || lockn > 1024 {
-			// unlock if there's nothing else buffered or if we've been
-			// locked for a fair amount of work
+		if buf.Buffered() < 4 || lockn > 1024 {
+			// unlock if there's potentiallyl less than a rune buffered or
+			// if we've been locked for a fair amount of work
 			t.mu.Unlock()
 			lockn = 0
 		}
