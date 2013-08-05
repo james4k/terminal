@@ -10,8 +10,8 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/james4k/termbox-go"
 	"github.com/kr/pty"
-	"github.com/nsf/termbox-go"
 	"j4k.co/terminal"
 )
 
