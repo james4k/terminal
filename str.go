@@ -53,7 +53,7 @@ func (s *strEscape) argString(i int, def string) string {
 	return s.args[i]
 }
 
-func (t *Term) handleSTR() {
+func (t *VT) handleSTR() {
 	s := &t.str
 	s.parse()
 

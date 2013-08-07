@@ -75,7 +75,8 @@ type cursor struct {
 
 type stateFn func(c rune)
 
-type Term struct {
+// VT represents the virtual terminal emulator state.
+type VT struct {
 	cols, rows    int
 	lines         []line
 	altLines      []line
@@ -94,8 +95,8 @@ type Term struct {
 	Stderr io.Writer // defaults to os.Stderr
 }
 
-func New(columns, rows int, pty *os.File) *Term {
-	t := &Term{
+func New(columns, rows int, pty *os.File) *VT {
+	t := &VT{
 		numlock: true,
 		pty:     pty,
 	}
@@ -106,34 +107,34 @@ func New(columns, rows int, pty *os.File) *Term {
 	return t
 }
 
-func (t *Term) logf(format string, args ...interface{}) {
+func (t *VT) logf(format string, args ...interface{}) {
 	fmt.Fprintf(t.Stderr, format, args...)
 }
 
-func (t *Term) log(s string) {
+func (t *VT) log(s string) {
 	fmt.Fprintln(t.Stderr, s)
 }
 
-func (t *Term) Cell(x, y int) (rune, uint16, uint16) {
+func (t *VT) Cell(x, y int) (rune, uint16, uint16) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.lines[y][x].c, t.lines[y][x].fg, t.lines[y][x].bg
 }
 
-func (t *Term) Cursor() (int, int) {
+func (t *VT) Cursor() (int, int) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.cur.x, t.cur.y
 }
 
-func (t *Term) CursorHidden() bool {
+func (t *VT) CursorHidden() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.mode&modeHide != 0
 }
 
 // Write takes pty input that is assumed to be utf8 encoded.
-func (t *Term) Write(p []byte) (int, error) {
+func (t *VT) Write(p []byte) (int, error) {
 	var written int
 	r := bytes.NewReader(p)
 	t.mu.Lock()
@@ -160,7 +161,7 @@ func (t *Term) Write(p []byte) (int, error) {
 
 // ReadFrom reads from r until EOF or error. r is a pty file in the common
 // case.
-func (t *Term) ReadFrom(r io.Reader) (int64, error) {
+func (t *VT) ReadFrom(r io.Reader) (int64, error) {
 	var written int64
 	var lockn int // put calls per mutex lock
 	defer func() {
@@ -194,11 +195,11 @@ func (t *Term) ReadFrom(r io.Reader) (int64, error) {
 	return written, nil
 }
 
-func (t *Term) put(c rune) {
+func (t *VT) put(c rune) {
 	t.state(c)
 }
 
-func (t *Term) putTab(forward bool) {
+func (t *VT) putTab(forward bool) {
 	x := t.cur.x
 	if forward {
 		if x == t.cols {
@@ -216,7 +217,7 @@ func (t *Term) putTab(forward bool) {
 	t.moveTo(x, t.cur.y)
 }
 
-func (t *Term) newline(firstCol bool) {
+func (t *VT) newline(firstCol bool) {
 	y := t.cur.y
 	if y == t.bottom {
 		t.scrollUp(t.top, 1)
@@ -242,7 +243,7 @@ var gfxCharTable = [62]rune{
 	'│', '≤', '≥', 'π', '≠', '£', '·', // x - ~
 }
 
-func (t *Term) setChar(c rune, attr *glyph, x, y int) {
+func (t *VT) setChar(c rune, attr *glyph, x, y int) {
 	if attr.mode&attrGfx != 0 {
 		if c >= 0x41 && c <= 0x7e && gfxCharTable[c-0x41] != 0 {
 			c = gfxCharTable[c-0x41]
@@ -253,7 +254,7 @@ func (t *Term) setChar(c rune, attr *glyph, x, y int) {
 	t.lines[y][x].c = c
 }
 
-func (t *Term) reset() {
+func (t *VT) reset() {
 	t.cur = cursor{}
 	for i := range t.tabs {
 		t.tabs[i] = false
@@ -270,7 +271,7 @@ func (t *Term) reset() {
 }
 
 // TODO: definitely can improve allocs
-func (t *Term) Resize(cols, rows int) bool {
+func (t *VT) Resize(cols, rows int) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if cols == t.cols && rows == t.rows {
@@ -331,16 +332,16 @@ func (t *Term) Resize(cols, rows int) bool {
 	return slide > 0
 }
 
-func (t *Term) saveCursor() {
+func (t *VT) saveCursor() {
 	t.curSaved = t.cur
 }
 
-func (t *Term) restoreCursor() {
+func (t *VT) restoreCursor() {
 	t.cur = t.curSaved
 	t.moveTo(t.cur.x, t.cur.y)
 }
 
-func (t *Term) clear(x0, y0, x1, y1 int) {
+func (t *VT) clear(x0, y0, x1, y1 int) {
 	if x0 > x1 {
 		x0, x1 = x1, x0
 	}
@@ -360,18 +361,18 @@ func (t *Term) clear(x0, y0, x1, y1 int) {
 	}
 }
 
-func (t *Term) clearAll() {
+func (t *VT) clearAll() {
 	t.clear(0, 0, t.cols-1, t.rows-1)
 }
 
-func (t *Term) moveAbsTo(x, y int) {
+func (t *VT) moveAbsTo(x, y int) {
 	if t.cur.state&cursorOrigin != 0 {
 		y += t.top
 	}
 	t.moveTo(x, y)
 }
 
-func (t *Term) moveTo(x, y int) {
+func (t *VT) moveTo(x, y int) {
 	var miny, maxy int
 	if t.cur.state&cursorOrigin != 0 {
 		miny = t.top
@@ -387,19 +388,19 @@ func (t *Term) moveTo(x, y int) {
 	t.cur.y = y
 }
 
-func (t *Term) swapScreen() {
+func (t *VT) swapScreen() {
 	t.lines, t.altLines = t.altLines, t.lines
 	t.mode ^= modeAltScreen
 	t.dirtyAll()
 }
 
-func (t *Term) dirtyAll() {
+func (t *VT) dirtyAll() {
 	for y := 0; y < t.rows; y++ {
 		t.dirty[y] = true
 	}
 }
 
-func (t *Term) setScroll(top, bottom int) {
+func (t *VT) setScroll(top, bottom int) {
 	top = clamp(top, 0, t.rows-1)
 	bottom = clamp(bottom, 0, t.rows-1)
 	if top > bottom {
@@ -432,7 +433,7 @@ func between(val, min, max int) bool {
 	return true
 }
 
-func (t *Term) scrollDown(orig, n int) {
+func (t *VT) scrollDown(orig, n int) {
 	n = clamp(n, 0, t.bottom-orig+1)
 	t.clear(0, t.bottom-n+1, t.cols-1, t.bottom)
 	for i := t.bottom; i >= orig+n; i-- {
@@ -444,7 +445,7 @@ func (t *Term) scrollDown(orig, n int) {
 	// TODO: selection scroll
 }
 
-func (t *Term) scrollUp(orig, n int) {
+func (t *VT) scrollUp(orig, n int) {
 	n = clamp(n, 0, t.bottom-orig+1)
 	t.clear(0, orig, t.cols-1, orig+n-1)
 	for i := orig; i <= t.bottom-n; i++ {
@@ -456,7 +457,7 @@ func (t *Term) scrollUp(orig, n int) {
 	// TODO: selection scroll
 }
 
-func (t *Term) modMode(set bool, bit modeFlags) {
+func (t *VT) modMode(set bool, bit modeFlags) {
 	if set {
 		t.mode |= bit
 	} else {
@@ -464,7 +465,7 @@ func (t *Term) modMode(set bool, bit modeFlags) {
 	}
 }
 
-func (t *Term) setMode(priv bool, set bool, args []int) {
+func (t *VT) setMode(priv bool, set bool, args []int) {
 	if priv {
 		for _, a := range args {
 			switch a {
@@ -567,7 +568,7 @@ func (t *Term) setMode(priv bool, set bool, args []int) {
 	}
 }
 
-func (t *Term) setAttr(attr []int) {
+func (t *VT) setAttr(attr []int) {
 	for i := 0; i < len(attr); i++ {
 		a := attr[i]
 		switch a {
@@ -637,7 +638,7 @@ func (t *Term) setAttr(attr []int) {
 	}
 }
 
-func (t *Term) insertBlanks(n int) {
+func (t *VT) insertBlanks(n int) {
 	src := t.cur.x
 	dst := src + n
 	size := t.cols - dst
@@ -651,21 +652,21 @@ func (t *Term) insertBlanks(n int) {
 	}
 }
 
-func (t *Term) insertBlankLines(n int) {
+func (t *VT) insertBlankLines(n int) {
 	if t.cur.y < t.top || t.cur.y > t.bottom {
 		return
 	}
 	t.scrollDown(t.cur.y, n)
 }
 
-func (t *Term) deleteLines(n int) {
+func (t *VT) deleteLines(n int) {
 	if t.cur.y < t.top || t.cur.y > t.bottom {
 		return
 	}
 	t.scrollUp(t.cur.y, n)
 }
 
-func (t *Term) deleteChars(n int) {
+func (t *VT) deleteChars(n int) {
 	src := t.cur.x + n
 	dst := t.cur.x
 	size := t.cols - src

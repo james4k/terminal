@@ -4,7 +4,7 @@ func isControlCode(c rune) bool {
 	return c < 0x20 || c == 0177
 }
 
-func (t *Term) parse(c rune) {
+func (t *VT) parse(c rune) {
 	if isControlCode(c) {
 		if t.handleControlCodes(c) || t.cur.attr.mode&attrGfx == 0 {
 			return
@@ -29,7 +29,7 @@ func (t *Term) parse(c rune) {
 	}
 }
 
-func (t *Term) parseEsc(c rune) {
+func (t *VT) parseEsc(c rune) {
 	if t.handleControlCodes(c) {
 		return
 	}
@@ -87,7 +87,7 @@ func (t *Term) parseEsc(c rune) {
 	t.state = next
 }
 
-func (t *Term) parseEscCSI(c rune) {
+func (t *VT) parseEscCSI(c rune) {
 	if t.handleControlCodes(c) {
 		return
 	}
@@ -97,7 +97,7 @@ func (t *Term) parseEscCSI(c rune) {
 	}
 }
 
-func (t *Term) parseEscStr(c rune) {
+func (t *VT) parseEscStr(c rune) {
 	switch c {
 	case '\033':
 		t.state = t.parseEscStrEnd
@@ -109,7 +109,7 @@ func (t *Term) parseEscStr(c rune) {
 	}
 }
 
-func (t *Term) parseEscStrEnd(c rune) {
+func (t *VT) parseEscStrEnd(c rune) {
 	if t.handleControlCodes(c) {
 		return
 	}
@@ -119,7 +119,7 @@ func (t *Term) parseEscStrEnd(c rune) {
 	}
 }
 
-func (t *Term) parseEscAltCharset(c rune) {
+func (t *VT) parseEscAltCharset(c rune) {
 	if t.handleControlCodes(c) {
 		return
 	}
@@ -139,7 +139,7 @@ func (t *Term) parseEscAltCharset(c rune) {
 	t.state = t.parse
 }
 
-func (t *Term) parseEscTest(c rune) {
+func (t *VT) parseEscTest(c rune) {
 	if t.handleControlCodes(c) {
 		return
 	}
@@ -154,7 +154,7 @@ func (t *Term) parseEscTest(c rune) {
 	t.state = t.parse
 }
 
-func (t *Term) handleControlCodes(c rune) bool {
+func (t *VT) handleControlCodes(c rune) bool {
 	if !isControlCode(c) {
 		return false
 	}

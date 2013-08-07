@@ -39,7 +39,7 @@ func filterESC(r io.Reader) io.Reader {
 	return pr
 }
 
-func update(term *terminal.Term, w, h int) {
+func update(term *terminal.VT, w, h int) {
 	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
 	for i := 0; i < h+2; i++ {
 		termbox.SetCell(0, i, '│', termbox.ColorDefault, termbox.ColorDefault)

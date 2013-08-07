@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func extractStr(t *Term, x0, x1, row int) string {
+func extractStr(t *VT, x0, x1, row int) string {
 	var s []rune
 	for i := x0; i <= x1; i++ {
 		s = append(s, t.lines[row][i].c)

@@ -60,7 +60,7 @@ func (c *csiEscape) arg(i, def int) int {
 	return c.args[i]
 }
 
-func (t *Term) handleCSI() {
+func (t *VT) handleCSI() {
 	c := &t.csi
 	switch c.mode {
 	default:

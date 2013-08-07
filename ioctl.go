@@ -18,7 +18,7 @@ func ioctl(f *os.File, cmd, p uintptr) error {
 	return nil
 }
 
-func (t *Term) ttyResize() error {
+func (t *VT) ttyResize() error {
 	if t.pty == nil {
 		return nil
 	}
