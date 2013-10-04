@@ -12,12 +12,12 @@ func (t *VT) parse(c rune) {
 	}
 	// TODO: update selection; see st.c:2450
 
-	if t.mode&modeWrap != 0 && t.cur.state&cursorWrapNext != 0 {
+	if t.mode&ModeWrap != 0 && t.cur.state&cursorWrapNext != 0 {
 		t.lines[t.cur.y][t.cur.x].mode |= attrWrap
 		t.newline(true)
 	}
 
-	if t.mode&modeInsert != 0 && t.cur.x+1 < t.cols {
+	if t.mode&ModeInsert != 0 && t.cur.x+1 < t.cols {
 		// TODO: move shiz, look at st.c:2458
 	}
 
@@ -73,9 +73,9 @@ func (t *VT) parseEsc(c rune) {
 	case 'c': // RIS - reset to initial state
 		t.reset()
 	case '=': // DECPAM - application keypad
-		t.mode |= modeAppKeypad
+		t.mode |= ModeAppKeypad
 	case '>': // DECPNM - normal keypad
-		t.mode &^= modeAppKeypad
+		t.mode &^= ModeAppKeypad
 	case '7': // DECSC - save cursor
 		t.saveCursor()
 	case '8': // DECRC - restore cursor
@@ -171,7 +171,7 @@ func (t *VT) handleControlCodes(c rune) bool {
 	// LF, VT, LF
 	case '\f', '\v', '\n':
 		// go to first col if mode is set
-		t.newline(t.mode&modeCRLF != 0)
+		t.newline(t.mode&ModeCRLF != 0)
 	// BEL
 	case '\a':
 		// TODO: emit sound

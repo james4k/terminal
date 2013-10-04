@@ -60,6 +60,11 @@ func (c *csiEscape) arg(i, def int) int {
 	return c.args[i]
 }
 
+// maxarg takes the maximum of arg(i, def) and def
+func (c *csiEscape) maxarg(i, def int) int {
+	return max(c.arg(i, def), def)
+}
+
 func (t *VT) handleCSI() {
 	c := &t.csi
 	switch c.mode {
@@ -68,17 +73,17 @@ func (t *VT) handleCSI() {
 	case '@': // ICH - insert <n> blank char
 		t.insertBlanks(c.arg(0, 1))
 	case 'A': // CUU - cursor <n> up
-		t.moveTo(t.cur.x, t.cur.y-c.arg(0, 1))
+		t.moveTo(t.cur.x, t.cur.y-c.maxarg(0, 1))
 	case 'B', 'e': // CUD, VPR - cursor <n> down
-		t.moveTo(t.cur.x, t.cur.y+c.arg(0, 1))
+		t.moveTo(t.cur.x, t.cur.y+c.maxarg(0, 1))
 	case 'c': // DA - device attributes
 		if c.arg(0, 0) == 0 {
 			// TODO: write vt102 id
 		}
 	case 'C', 'a': // CUF, HPR - cursor <n> forward
-		t.moveTo(t.cur.x+c.arg(0, 1), t.cur.y)
+		t.moveTo(t.cur.x+c.maxarg(0, 1), t.cur.y)
 	case 'D': // CUB - cursor <n> backward
-		t.moveTo(t.cur.x-c.arg(0, 1), t.cur.y)
+		t.moveTo(t.cur.x-c.maxarg(0, 1), t.cur.y)
 	case 'E': // CNL - cursor <n> down and first col
 		t.moveTo(0, t.cur.y+c.arg(0, 1))
 	case 'F': // CPL - cursor <n> up and first col

@@ -34,29 +34,29 @@ const (
 	cursorOrigin
 )
 
-type modeFlags uint32
+type ModeFlag uint32
 
 const (
-	modeWrap modeFlags = 1 << iota
-	modeInsert
-	modeAppKeypad
-	modeAltScreen
-	modeCRLF
-	modeMouseButton
-	modeMouseMotion
-	modeReverse
-	modeKeyboardLock
-	modeHide
-	modeEcho
-	modeAppCursor
-	modeMouseSgr
-	mode8bit
-	modeBlink
-	modeFBlink
-	modeFocus
-	modeMouseX10
-	modeMouseMany
-	modeMouseMask = modeMouseButton | modeMouseMotion | modeMouseX10 | modeMouseMany
+	ModeWrap ModeFlag = 1 << iota
+	ModeInsert
+	ModeAppKeypad
+	ModeAltScreen
+	ModeCRLF
+	ModeMouseButton
+	ModeMouseMotion
+	ModeReverse
+	ModeKeyboardLock
+	ModeHide
+	ModeEcho
+	ModeAppCursor
+	ModeMouseSgr
+	Mode8bit
+	ModeBlink
+	ModeFBlink
+	ModeFocus
+	ModeMouseX10
+	ModeMouseMany
+	ModeMouseMask = ModeMouseButton | ModeMouseMotion | ModeMouseX10 | ModeMouseMany
 )
 
 type glyph struct {
@@ -83,7 +83,7 @@ type VT struct {
 	dirty         []bool // line dirtiness
 	cur, curSaved cursor
 	top, bottom   int // scroll limits
-	mode          modeFlags
+	mode          ModeFlag
 	state         stateFn
 	str           strEscape
 	csi           csiEscape
@@ -130,7 +130,14 @@ func (t *VT) Cursor() (int, int) {
 func (t *VT) CursorHidden() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.mode&modeHide != 0
+	return t.mode&ModeHide != 0
+}
+
+// Mode tests if m is currently set.
+func (t *VT) Mode(m ModeFlag) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.mode&m != 0
 }
 
 // Write takes pty input that is assumed to be utf8 encoded.
@@ -264,7 +271,7 @@ func (t *VT) reset() {
 	}
 	t.top = 0
 	t.bottom = t.rows - 1
-	t.mode = modeWrap
+	t.mode = ModeWrap
 	t.clear(0, 0, t.rows-1, t.cols-1)
 	t.moveTo(0, 0)
 	t.saveCursor()
@@ -390,7 +397,7 @@ func (t *VT) moveTo(x, y int) {
 
 func (t *VT) swapScreen() {
 	t.lines, t.altLines = t.altLines, t.lines
-	t.mode ^= modeAltScreen
+	t.mode ^= ModeAltScreen
 	t.dirtyAll()
 }
 
@@ -412,6 +419,13 @@ func (t *VT) setScroll(top, bottom int) {
 
 func min(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
 		return a
 	}
 	return b
@@ -457,7 +471,7 @@ func (t *VT) scrollUp(orig, n int) {
 	// TODO: selection scroll
 }
 
-func (t *VT) modMode(set bool, bit modeFlags) {
+func (t *VT) modMode(set bool, bit ModeFlag) {
 	if set {
 		t.mode |= bit
 	} else {
@@ -470,10 +484,10 @@ func (t *VT) setMode(priv bool, set bool, args []int) {
 		for _, a := range args {
 			switch a {
 			case 1: // DECCKM - cursor key
-				t.modMode(set, modeAppCursor)
+				t.modMode(set, ModeAppCursor)
 			case 5: // DECSCNM - reverse video
 				mode := t.mode
-				t.modMode(set, modeReverse)
+				t.modMode(set, ModeReverse)
 				if mode != t.mode {
 					// TODO: redraw
 				}
@@ -485,7 +499,7 @@ func (t *VT) setMode(priv bool, set bool, args []int) {
 				}
 				t.moveAbsTo(0, 0)
 			case 7: // DECAWM - auto wrap
-				t.modMode(set, modeWrap)
+				t.modMode(set, ModeWrap)
 			// IGNORED:
 			case 0, // error
 				2,  // DECANM - ANSI/VT52
@@ -498,28 +512,28 @@ func (t *VT) setMode(priv bool, set bool, args []int) {
 				12: // att610 - start blinking cursor
 				break
 			case 25: // DECTCEM - text cursor enable mode
-				t.modMode(!set, modeHide)
+				t.modMode(!set, ModeHide)
 			case 9: // X10 mouse compatibility mode
-				t.modMode(false, modeMouseMask)
-				t.modMode(set, modeMouseX10)
+				t.modMode(false, ModeMouseMask)
+				t.modMode(set, ModeMouseX10)
 			case 1000: // report button press
-				t.modMode(false, modeMouseMask)
-				t.modMode(set, modeMouseButton)
+				t.modMode(false, ModeMouseMask)
+				t.modMode(set, ModeMouseButton)
 			case 1002: // report motion on button press
-				t.modMode(false, modeMouseMask)
-				t.modMode(set, modeMouseMotion)
+				t.modMode(false, ModeMouseMask)
+				t.modMode(set, ModeMouseMotion)
 			case 1003: // enable all mouse motions
-				t.modMode(false, modeMouseMask)
-				t.modMode(set, modeMouseMany)
+				t.modMode(false, ModeMouseMask)
+				t.modMode(set, ModeMouseMany)
 			case 1004: // send focus events to tty
-				t.modMode(set, modeFocus)
+				t.modMode(set, ModeFocus)
 			case 1006: // extended reporting mode
-				t.modMode(set, modeMouseSgr)
+				t.modMode(set, ModeMouseSgr)
 			case 1034:
-				t.modMode(set, mode8bit)
+				t.modMode(set, Mode8bit)
 			case 1049, // = 1047 and 1048
 				47, 1047:
-				alt := t.mode&modeAltScreen != 0
+				alt := t.mode&ModeAltScreen != 0
 				if alt {
 					t.clear(0, 0, t.cols-1, t.rows-1)
 				}
@@ -554,13 +568,13 @@ func (t *VT) setMode(priv bool, set bool, args []int) {
 			switch a {
 			case 0: // Error (ignored)
 			case 2: // KAM - keyboard action
-				t.modMode(set, modeKeyboardLock)
+				t.modMode(set, ModeKeyboardLock)
 			case 4: // IRM - insertion-replacement
-				t.modMode(set, modeInsert)
+				t.modMode(set, ModeInsert)
 			case 12: // SRM - send/receive
-				t.modMode(set, modeEcho)
+				t.modMode(set, ModeEcho)
 			case 20: // LNM - linefeed/newline
-				t.modMode(set, modeCRLF)
+				t.modMode(set, ModeCRLF)
 			default:
 				t.logf("unknown set/reset mode %d\n", a)
 			}
