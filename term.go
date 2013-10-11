@@ -12,10 +12,6 @@ import (
 
 const (
 	tabspaces = 8
-
-	defaultfg = 7
-	defaultbg = 0
-	defaultcs = 256
 )
 
 const (
@@ -62,7 +58,7 @@ const (
 type glyph struct {
 	c      rune
 	mode   int16
-	fg, bg uint16
+	fg, bg Color
 }
 
 type line []glyph
@@ -115,10 +111,10 @@ func (t *VT) log(s string) {
 	fmt.Fprintln(t.Stderr, s)
 }
 
-func (t *VT) Cell(x, y int) (rune, uint16, uint16) {
+func (t *VT) Cell(x, y int) (ch rune, fg Color, bg Color) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.lines[y][x].c, t.lines[y][x].fg, t.lines[y][x].bg
+	return t.lines[y][x].c, Color(t.lines[y][x].fg), Color(t.lines[y][x].bg)
 }
 
 func (t *VT) Cursor() (int, int) {
@@ -193,7 +189,7 @@ func (t *VT) ReadFrom(r io.Reader) (int64, error) {
 		t.put(c)
 		lockn++
 		if buf.Buffered() < 4 || lockn > 1024 {
-			// unlock if there's potentiallyl less than a rune buffered or
+			// unlock if there's potentially less than a rune buffered or
 			// if we've been locked for a fair amount of work
 			t.mu.Unlock()
 			lockn = 0
@@ -259,10 +255,16 @@ func (t *VT) setChar(c rune, attr *glyph, x, y int) {
 	t.dirty[y] = true
 	t.lines[y][x] = *attr
 	t.lines[y][x].c = c
+	//if t.options.BrightBold && attr.mode&attrBold != 0 && attr.fg < 8 {
+	if attr.mode&attrBold != 0 && attr.fg < 8 {
+		t.lines[y][x].fg = attr.fg + 8
+	}
 }
 
 func (t *VT) reset() {
 	t.cur = cursor{}
+	t.cur.attr.fg = DefaultFG
+	t.cur.attr.bg = DefaultBG
 	for i := range t.tabs {
 		t.tabs[i] = false
 	}
@@ -583,13 +585,16 @@ func (t *VT) setMode(priv bool, set bool, args []int) {
 }
 
 func (t *VT) setAttr(attr []int) {
+	if len(attr) == 0 {
+		attr = []int{0}
+	}
 	for i := 0; i < len(attr); i++ {
 		a := attr[i]
 		switch a {
 		case 0:
 			t.cur.attr.mode &^= attrReverse | attrUnderline | attrBold | attrItalic | attrBlink
-			t.cur.attr.fg = defaultfg
-			t.cur.attr.bg = defaultbg
+			t.cur.attr.fg = DefaultFG
+			t.cur.attr.bg = DefaultBG
 		case 1:
 			t.cur.attr.mode |= attrBold
 		case 3:
@@ -614,7 +619,7 @@ func (t *VT) setAttr(attr []int) {
 			if i+2 < len(attr) && attr[i+1] == 5 {
 				i += 2
 				if between(attr[i], 0, 255) {
-					t.cur.attr.fg = uint16(attr[i])
+					t.cur.attr.fg = Color(attr[i])
 				} else {
 					t.logf("bad fgcolor %d\n", attr[i])
 				}
@@ -622,12 +627,12 @@ func (t *VT) setAttr(attr []int) {
 				t.logf("gfx attr %d unknown\n", a)
 			}
 		case 39:
-			t.cur.attr.fg = defaultfg
+			t.cur.attr.fg = DefaultFG
 		case 48:
 			if i+2 < len(attr) && attr[i+1] == 5 {
 				i += 2
 				if between(attr[i], 0, 255) {
-					t.cur.attr.bg = uint16(attr[i])
+					t.cur.attr.bg = Color(attr[i])
 				} else {
 					t.logf("bad bgcolor %d\n", attr[i])
 				}
@@ -635,16 +640,16 @@ func (t *VT) setAttr(attr []int) {
 				t.logf("gfx attr %d unknown\n", a)
 			}
 		case 49:
-			t.cur.attr.bg = defaultbg
+			t.cur.attr.bg = DefaultBG
 		default:
 			if between(a, 30, 37) {
-				t.cur.attr.fg = uint16(a - 30)
+				t.cur.attr.fg = Color(a - 30)
 			} else if between(a, 40, 47) {
-				t.cur.attr.bg = uint16(a - 40)
+				t.cur.attr.bg = Color(a - 40)
 			} else if between(a, 90, 97) {
-				t.cur.attr.fg = uint16(a - 90 + 8)
+				t.cur.attr.fg = Color(a - 90 + 8)
 			} else if between(a, 100, 107) {
-				t.cur.attr.bg = uint16(a - 100 + 8)
+				t.cur.attr.bg = Color(a - 100 + 8)
 			} else {
 				t.logf("gfx attr %d unknown\n", a)
 			}
