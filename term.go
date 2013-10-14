@@ -98,6 +98,8 @@ func New(columns, rows int, pty *os.File) *VT {
 	}
 	t.state = t.parse
 	t.Stderr = os.Stderr
+	t.cur.attr.fg = DefaultFG
+	t.cur.attr.bg = DefaultBG
 	t.Resize(columns, rows)
 	t.reset()
 	return t
@@ -265,6 +267,7 @@ func (t *VT) reset() {
 	t.cur = cursor{}
 	t.cur.attr.fg = DefaultFG
 	t.cur.attr.bg = DefaultBG
+	t.saveCursor()
 	for i := range t.tabs {
 		t.tabs[i] = false
 	}
@@ -276,7 +279,6 @@ func (t *VT) reset() {
 	t.mode = ModeWrap
 	t.clear(0, 0, t.rows-1, t.cols-1)
 	t.moveTo(0, 0)
-	t.saveCursor()
 }
 
 // TODO: definitely can improve allocs
