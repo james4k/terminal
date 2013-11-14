@@ -71,6 +71,9 @@ func (t *VT) Write(p []byte) (int, error) {
 	for {
 		c, sz, err := r.ReadRune()
 		if err != nil {
+			if err == io.EOF {
+				break
+			}
 			return written, err
 		}
 		written += sz
