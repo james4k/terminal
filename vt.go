@@ -81,10 +81,9 @@ func (t *VT) Write(p []byte) (int, error) {
 			if r.Len() == 0 {
 				// not enough bytes for a full rune
 				return written - 1, nil
-			} else {
-				t.dest.logln("invalid utf8 sequence")
-				continue
 			}
+			t.dest.logln("invalid utf8 sequence")
+			continue
 		}
 		t.dest.put(c)
 	}
