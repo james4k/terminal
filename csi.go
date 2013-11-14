@@ -65,7 +65,7 @@ func (c *csiEscape) maxarg(i, def int) int {
 	return max(c.arg(i, def), def)
 }
 
-func (t *VT) handleCSI() {
+func (t *State) handleCSI() {
 	c := &t.csi
 	switch c.mode {
 	default:

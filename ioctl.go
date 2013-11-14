@@ -18,15 +18,15 @@ func ioctl(f *os.File, cmd, p uintptr) error {
 	return nil
 }
 
-func (t *VT) ttyResize() error {
+func (t *VT) ptyResize() error {
 	if t.pty == nil {
 		return nil
 	}
 	var w struct{ row, col, xpix, ypix uint16 }
-	w.row = uint16(t.rows)
-	w.col = uint16(t.cols)
-	w.xpix = 16 * uint16(t.cols)
-	w.ypix = 16 * uint16(t.rows)
+	w.row = uint16(t.dest.rows)
+	w.col = uint16(t.dest.cols)
+	w.xpix = 16 * uint16(t.dest.cols)
+	w.ypix = 16 * uint16(t.dest.rows)
 	return ioctl(t.pty, syscall.TIOCSWINSZ,
 		uintptr(unsafe.Pointer(&w)))
 }

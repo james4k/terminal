@@ -53,7 +53,7 @@ func (s *strEscape) argString(i int, def string) string {
 	return s.args[i]
 }
 
-func (t *VT) handleSTR() {
+func (t *State) handleSTR() {
 	s := &t.str
 	s.parse()
 
@@ -63,7 +63,7 @@ func (t *VT) handleSTR() {
 		case 0, 1, 2:
 			title := s.argString(1, "")
 			if title != "" {
-				// TODO: setTitle(title)
+				t.setTitle(title)
 			}
 		case 4: // color set
 			if len(s.args) < 3 {
@@ -78,7 +78,10 @@ func (t *VT) handleSTR() {
 			// TODO: s.dump()
 		}
 	case 'k': // old title set compatibility
-		// TODO: setTitle(s.argString(0, ""))
+		title := s.argString(0, "")
+		if title != "" {
+			t.setTitle(title)
+		}
 	default:
 		// TODO: Ignore these codes instead of complain?
 		// 'P': // DSC - device control string

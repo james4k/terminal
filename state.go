@@ -1,13 +1,8 @@
 package terminal
 
 import (
-	"bufio"
-	"bytes"
-	"fmt"
-	"io"
-	"os"
+	"log"
 	"sync"
-	"unicode"
 )
 
 const (
@@ -30,8 +25,10 @@ const (
 	cursorOrigin
 )
 
+// ModeFlag represents various terminal mode states.
 type ModeFlag uint32
 
+// Terminal modes
 const (
 	ModeWrap ModeFlag = 1 << iota
 	ModeInsert
@@ -55,6 +52,15 @@ const (
 	ModeMouseMask = ModeMouseButton | ModeMouseMotion | ModeMouseX10 | ModeMouseMany
 )
 
+// ChangeFlag represents possible state changes of the terminal.
+type ChangeFlag uint32
+
+// Terminal changes to occur in VT.ReadState
+const (
+	ChangedScreen ChangeFlag = 1 << iota
+	ChangedTitle
+)
+
 type glyph struct {
 	c      rune
 	mode   int16
@@ -69,142 +75,123 @@ type cursor struct {
 	state uint8
 }
 
-type stateFn func(c rune)
+type parseState func(c rune)
 
-// VT represents the virtual terminal emulator state.
-type VT struct {
+// State represents the terminal emulation state. Use Lock/Unlock
+// methods to synchronize data access with VT.
+type State struct {
+	DebugLogger *log.Logger
+
+	mu            sync.Mutex
+	changed       ChangeFlag
 	cols, rows    int
 	lines         []line
 	altLines      []line
 	dirty         []bool // line dirtiness
+	anydirty      bool
 	cur, curSaved cursor
 	top, bottom   int // scroll limits
 	mode          ModeFlag
-	state         stateFn
+	state         parseState
 	str           strEscape
 	csi           csiEscape
 	numlock       bool
 	tabs          []bool
-	pty           *os.File
-	mu            sync.RWMutex // for now, this protects everything
-
-	Stderr io.Writer // defaults to os.Stderr
+	title         string
 }
 
-func New(columns, rows int, pty *os.File) *VT {
-	t := &VT{
-		numlock: true,
-		pty:     pty,
+func (t *State) logf(format string, args ...interface{}) {
+	if t.DebugLogger != nil {
+		t.DebugLogger.Printf(format, args...)
 	}
-	t.state = t.parse
-	t.Stderr = os.Stderr
-	t.cur.attr.fg = DefaultFG
-	t.cur.attr.bg = DefaultBG
-	t.Resize(columns, rows)
-	t.reset()
-	return t
 }
 
-func (t *VT) logf(format string, args ...interface{}) {
-	fmt.Fprintf(t.Stderr, format, args...)
+func (t *State) logln(s string) {
+	if t.DebugLogger != nil {
+		t.DebugLogger.Println(s)
+	}
 }
 
-func (t *VT) log(s string) {
-	fmt.Fprintln(t.Stderr, s)
+func (t *State) lock() {
+	t.mu.Lock()
 }
 
-func (t *VT) Cell(x, y int) (ch rune, fg Color, bg Color) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
+func (t *State) unlock() {
+	t.mu.Unlock()
+}
+
+// Lock locks the state object's mutex.
+func (t *State) Lock() {
+	t.mu.Lock()
+}
+
+// Unlock resets change flags and unlocks the state object's mutex.
+func (t *State) Unlock() {
+	t.resetChanges()
+	t.mu.Unlock()
+}
+
+// Cell returns the character code, foreground color, and background
+// color at position (x, y) relative to the top left of the terminal.
+func (t *State) Cell(x, y int) (ch rune, fg Color, bg Color) {
 	return t.lines[y][x].c, Color(t.lines[y][x].fg), Color(t.lines[y][x].bg)
 }
 
-func (t *VT) Cursor() (int, int) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
+// Cursor returns the current position of the cursor.
+func (t *State) Cursor() (int, int) {
 	return t.cur.x, t.cur.y
 }
 
-func (t *VT) CursorHidden() bool {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.mode&ModeHide != 0
+// CursorVisible returns the visible state of the cursor.
+func (t *State) CursorVisible() bool {
+	return t.mode&ModeHide == 0
 }
 
-// Mode tests if m is currently set.
-func (t *VT) Mode(m ModeFlag) bool {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.mode&m != 0
+// Mode tests if mode is currently set.
+func (t *State) Mode(mode ModeFlag) bool {
+	return t.mode&mode != 0
 }
 
-// Write takes pty input that is assumed to be utf8 encoded.
-func (t *VT) Write(p []byte) (int, error) {
-	var written int
-	r := bytes.NewReader(p)
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	for {
-		c, sz, err := r.ReadRune()
-		if err != nil {
-			return written, err
-		}
-		written += sz
-		if c == unicode.ReplacementChar && sz == 1 {
-			if r.Len() == 0 {
-				// not enough bytes for a full rune
-				return written - 1, nil
-			} else {
-				t.log("invalid utf8 sequence")
-				continue
-			}
-		}
-		t.put(c)
+// Title returns the current title set via the tty.
+func (t *State) Title() string {
+	return t.title
+}
+
+/*
+// ChangeMask returns a bitfield of changes that have occured by VT.
+func (t *State) ChangeMask() ChangeFlag {
+	return t.changed
+}
+*/
+
+// Changed returns true if change has occured.
+func (t *State) Changed(change ChangeFlag) bool {
+	return t.changed&change != 0
+}
+
+// resetChanges resets the change mask and dirtiness.
+func (t *State) resetChanges() {
+	for i := range t.dirty {
+		t.dirty[i] = false
 	}
-	return written, nil
+	t.anydirty = false
+	t.changed = 0
 }
 
-// ReadFrom reads from r until EOF or error. r is a pty file in the common
-// case.
-func (t *VT) ReadFrom(r io.Reader) (int64, error) {
-	var written int64
-	var lockn int // put calls per mutex lock
-	defer func() {
-		if lockn > 0 {
-			t.mu.Unlock()
-		}
-	}()
-	buf := bufio.NewReader(r)
-	for {
-		c, sz, err := buf.ReadRune()
-		if err != nil {
-			return written, err
-		}
-		written += int64(sz)
-		if c == unicode.ReplacementChar && sz == 1 {
-			t.log("invalid utf8 sequence")
-			continue
-		}
-		if lockn == 0 {
-			t.mu.Lock()
-		}
-		t.put(c)
-		lockn++
-		if buf.Buffered() < 4 || lockn > 1024 {
-			// unlock if there's potentially less than a rune buffered or
-			// if we've been locked for a fair amount of work
-			t.mu.Unlock()
-			lockn = 0
-		}
-	}
-	return written, nil
+func (t *State) saveCursor() {
+	t.curSaved = t.cur
 }
 
-func (t *VT) put(c rune) {
+func (t *State) restoreCursor() {
+	t.cur = t.curSaved
+	t.moveTo(t.cur.x, t.cur.y)
+}
+
+func (t *State) put(c rune) {
 	t.state(c)
 }
 
-func (t *VT) putTab(forward bool) {
+func (t *State) putTab(forward bool) {
 	x := t.cur.x
 	if forward {
 		if x == t.cols {
@@ -222,10 +209,13 @@ func (t *VT) putTab(forward bool) {
 	t.moveTo(x, t.cur.y)
 }
 
-func (t *VT) newline(firstCol bool) {
+func (t *State) newline(firstCol bool) {
 	y := t.cur.y
 	if y == t.bottom {
+		cur := t.cur
+		t.cur = t.defaultCursor()
 		t.scrollUp(t.top, 1)
+		t.cur = cur
 	} else {
 		y++
 	}
@@ -248,12 +238,13 @@ var gfxCharTable = [62]rune{
 	'│', '≤', '≥', 'π', '≠', '£', '·', // x - ~
 }
 
-func (t *VT) setChar(c rune, attr *glyph, x, y int) {
+func (t *State) setChar(c rune, attr *glyph, x, y int) {
 	if attr.mode&attrGfx != 0 {
 		if c >= 0x41 && c <= 0x7e && gfxCharTable[c-0x41] != 0 {
 			c = gfxCharTable[c-0x41]
 		}
 	}
+	t.changed |= ChangedScreen
 	t.dirty[y] = true
 	t.lines[y][x] = *attr
 	t.lines[y][x].c = c
@@ -261,12 +252,21 @@ func (t *VT) setChar(c rune, attr *glyph, x, y int) {
 	if attr.mode&attrBold != 0 && attr.fg < 8 {
 		t.lines[y][x].fg = attr.fg + 8
 	}
+	if attr.mode&attrReverse != 0 {
+		t.lines[y][x].fg = attr.bg
+		t.lines[y][x].bg = attr.fg
+	}
 }
 
-func (t *VT) reset() {
-	t.cur = cursor{}
-	t.cur.attr.fg = DefaultFG
-	t.cur.attr.bg = DefaultBG
+func (t *State) defaultCursor() cursor {
+	c := cursor{}
+	c.attr.fg = DefaultFG
+	c.attr.bg = DefaultBG
+	return c
+}
+
+func (t *State) reset() {
+	t.cur = t.defaultCursor()
 	t.saveCursor()
 	for i := range t.tabs {
 		t.tabs[i] = false
@@ -282,9 +282,7 @@ func (t *VT) reset() {
 }
 
 // TODO: definitely can improve allocs
-func (t *VT) Resize(cols, rows int) bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+func (t *State) resize(cols, rows int) bool {
 	if cols == t.cols && rows == t.rows {
 		return false
 	}
@@ -305,6 +303,7 @@ func (t *VT) Resize(cols, rows int) bool {
 
 	minrows := min(rows, t.rows)
 	mincols := min(cols, t.cols)
+	t.changed |= ChangedScreen
 	for i := 0; i < rows; i++ {
 		t.dirty[i] = true
 		t.lines[i] = make(line, cols)
@@ -338,21 +337,10 @@ func (t *VT) Resize(cols, rows int) bool {
 		}
 		t.swapScreen()
 	}
-
-	t.ttyResize()
 	return slide > 0
 }
 
-func (t *VT) saveCursor() {
-	t.curSaved = t.cur
-}
-
-func (t *VT) restoreCursor() {
-	t.cur = t.curSaved
-	t.moveTo(t.cur.x, t.cur.y)
-}
-
-func (t *VT) clear(x0, y0, x1, y1 int) {
+func (t *State) clear(x0, y0, x1, y1 int) {
 	if x0 > x1 {
 		x0, x1 = x1, x0
 	}
@@ -363,6 +351,7 @@ func (t *VT) clear(x0, y0, x1, y1 int) {
 	x1 = clamp(x1, 0, t.cols-1)
 	y0 = clamp(y0, 0, t.rows-1)
 	y1 = clamp(y1, 0, t.rows-1)
+	t.changed |= ChangedScreen
 	for y := y0; y <= y1; y++ {
 		t.dirty[y] = true
 		for x := x0; x <= x1; x++ {
@@ -372,18 +361,18 @@ func (t *VT) clear(x0, y0, x1, y1 int) {
 	}
 }
 
-func (t *VT) clearAll() {
+func (t *State) clearAll() {
 	t.clear(0, 0, t.cols-1, t.rows-1)
 }
 
-func (t *VT) moveAbsTo(x, y int) {
+func (t *State) moveAbsTo(x, y int) {
 	if t.cur.state&cursorOrigin != 0 {
 		y += t.top
 	}
 	t.moveTo(x, y)
 }
 
-func (t *VT) moveTo(x, y int) {
+func (t *State) moveTo(x, y int) {
 	var miny, maxy int
 	if t.cur.state&cursorOrigin != 0 {
 		miny = t.top
@@ -394,24 +383,26 @@ func (t *VT) moveTo(x, y int) {
 	}
 	x = clamp(x, 0, t.cols-1)
 	y = clamp(y, miny, maxy)
+	t.changed |= ChangedScreen
 	t.cur.state &^= cursorWrapNext
 	t.cur.x = x
 	t.cur.y = y
 }
 
-func (t *VT) swapScreen() {
+func (t *State) swapScreen() {
 	t.lines, t.altLines = t.altLines, t.lines
 	t.mode ^= ModeAltScreen
 	t.dirtyAll()
 }
 
-func (t *VT) dirtyAll() {
+func (t *State) dirtyAll() {
+	t.changed |= ChangedScreen
 	for y := 0; y < t.rows; y++ {
 		t.dirty[y] = true
 	}
 }
 
-func (t *VT) setScroll(top, bottom int) {
+func (t *State) setScroll(top, bottom int) {
 	top = clamp(top, 0, t.rows-1)
 	bottom = clamp(bottom, 0, t.rows-1)
 	if top > bottom {
@@ -451,9 +442,10 @@ func between(val, min, max int) bool {
 	return true
 }
 
-func (t *VT) scrollDown(orig, n int) {
+func (t *State) scrollDown(orig, n int) {
 	n = clamp(n, 0, t.bottom-orig+1)
 	t.clear(0, t.bottom-n+1, t.cols-1, t.bottom)
+	t.changed |= ChangedScreen
 	for i := t.bottom; i >= orig+n; i-- {
 		t.lines[i], t.lines[i-n] = t.lines[i-n], t.lines[i]
 		t.dirty[i] = true
@@ -463,9 +455,10 @@ func (t *VT) scrollDown(orig, n int) {
 	// TODO: selection scroll
 }
 
-func (t *VT) scrollUp(orig, n int) {
+func (t *State) scrollUp(orig, n int) {
 	n = clamp(n, 0, t.bottom-orig+1)
 	t.clear(0, orig, t.cols-1, orig+n-1)
+	t.changed |= ChangedScreen
 	for i := orig; i <= t.bottom-n; i++ {
 		t.lines[i], t.lines[i+n] = t.lines[i+n], t.lines[i]
 		t.dirty[i] = true
@@ -475,7 +468,7 @@ func (t *VT) scrollUp(orig, n int) {
 	// TODO: selection scroll
 }
 
-func (t *VT) modMode(set bool, bit ModeFlag) {
+func (t *State) modMode(set bool, bit ModeFlag) {
 	if set {
 		t.mode |= bit
 	} else {
@@ -483,7 +476,7 @@ func (t *VT) modMode(set bool, bit ModeFlag) {
 	}
 }
 
-func (t *VT) setMode(priv bool, set bool, args []int) {
+func (t *State) setMode(priv bool, set bool, args []int) {
 	if priv {
 		for _, a := range args {
 			switch a {
@@ -575,10 +568,15 @@ func (t *VT) setMode(priv bool, set bool, args []int) {
 				t.modMode(set, ModeKeyboardLock)
 			case 4: // IRM - insertion-replacement
 				t.modMode(set, ModeInsert)
+				t.logln("insert mode not implemented")
 			case 12: // SRM - send/receive
 				t.modMode(set, ModeEcho)
 			case 20: // LNM - linefeed/newline
 				t.modMode(set, ModeCRLF)
+			case 34:
+				t.logln("right-to-left mode not implemented")
+			case 96:
+				t.logln("right-to-left copy mode not implemented")
 			default:
 				t.logf("unknown set/reset mode %d\n", a)
 			}
@@ -586,7 +584,7 @@ func (t *VT) setMode(priv bool, set bool, args []int) {
 	}
 }
 
-func (t *VT) setAttr(attr []int) {
+func (t *State) setAttr(attr []int) {
 	if len(attr) == 0 {
 		attr = []int{0}
 	}
@@ -659,10 +657,11 @@ func (t *VT) setAttr(attr []int) {
 	}
 }
 
-func (t *VT) insertBlanks(n int) {
+func (t *State) insertBlanks(n int) {
 	src := t.cur.x
 	dst := src + n
 	size := t.cols - dst
+	t.changed |= ChangedScreen
 	t.dirty[t.cur.y] = true
 
 	if dst >= t.cols {
@@ -673,24 +672,25 @@ func (t *VT) insertBlanks(n int) {
 	}
 }
 
-func (t *VT) insertBlankLines(n int) {
+func (t *State) insertBlankLines(n int) {
 	if t.cur.y < t.top || t.cur.y > t.bottom {
 		return
 	}
 	t.scrollDown(t.cur.y, n)
 }
 
-func (t *VT) deleteLines(n int) {
+func (t *State) deleteLines(n int) {
 	if t.cur.y < t.top || t.cur.y > t.bottom {
 		return
 	}
 	t.scrollUp(t.cur.y, n)
 }
 
-func (t *VT) deleteChars(n int) {
+func (t *State) deleteChars(n int) {
 	src := t.cur.x + n
 	dst := t.cur.x
 	size := t.cols - src
+	t.changed |= ChangedScreen
 	t.dirty[t.cur.y] = true
 
 	if src >= t.cols {
@@ -699,4 +699,9 @@ func (t *VT) deleteChars(n int) {
 		copy(t.lines[t.cur.y][dst:dst+size], t.lines[t.cur.y][src:src+size])
 		t.clear(t.cols-n, t.cur.y, t.cols-1, t.cur.y)
 	}
+}
+
+func (t *State) setTitle(title string) {
+	t.changed |= ChangedTitle
+	t.title = title
 }

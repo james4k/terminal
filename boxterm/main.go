@@ -4,14 +4,11 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"io/ioutil"
 	//"math/rand"
 	"os"
 	"os/exec"
-	"time"
 
 	"github.com/james4k/termbox-go-noinput"
-	"github.com/kr/pty"
 	"j4k.co/terminal"
 )
 
@@ -39,7 +36,7 @@ func filterESC(r io.Reader) io.Reader {
 	return pr
 }
 
-func update(term *terminal.VT, w, h int) {
+func update(term *terminal.VT, state *terminal.State, w, h int) {
 	termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
 	for i := 0; i < h+2; i++ {
 		termbox.SetCell(0, i, '│', termbox.ColorDefault, termbox.ColorDefault)
@@ -53,9 +50,12 @@ func update(term *terminal.VT, w, h int) {
 	termbox.SetCell(w+1, 0, '┐', termbox.ColorDefault, termbox.ColorDefault)
 	termbox.SetCell(w+1, h+1, '┘', termbox.ColorDefault, termbox.ColorDefault)
 	termbox.SetCell(0, h+1, '└', termbox.ColorDefault, termbox.ColorDefault)
+
+	state.Lock()
+	defer state.Unlock()
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
-			c, fg, bg := term.Cell(x, y)
+			c, fg, bg := state.Cell(x, y)
 			/*
 				// termbox only supports 8 colors
 				if fg > 15 {
@@ -76,15 +76,21 @@ func update(term *terminal.VT, w, h int) {
 				termbox.Attribute(bg+1))
 		}
 	}
-	if term.CursorHidden() {
-		termbox.SetCursor(-1, -1)
-	} else {
-		curx, cury := term.Cursor()
+	if state.CursorVisible() {
+		curx, cury := state.Cursor()
 		curx += 1
 		cury += 1
 		termbox.SetCursor(curx, cury)
+	} else {
+		termbox.SetCursor(-1, -1)
 	}
 	termbox.Flush()
+}
+
+func logpanic() {
+	if x := recover(); x != nil {
+		fmt.Fprintln(os.Stderr, x)
+	}
 }
 
 func main() {
@@ -92,11 +98,13 @@ func main() {
 	// kernel panic if we termbox.Init() first! But, only when the process is
 	// terminated in some way. Crazy. If this was more than a debug app it
 	// might be worth looking more into.
-	f, err := pty.Start(exec.Command(os.Getenv("SHELL"), "-i"))
+	var state terminal.State
+	cmd := exec.Command(os.Getenv("SHELL"), "-i")
+	term, pty, err := terminal.Start(&state, cmd)
 	if err != nil {
 		panic(err)
 	}
-	defer f.Close()
+	defer term.Close()
 
 	err = termbox.Init()
 	if err != nil {
@@ -105,32 +113,31 @@ func main() {
 	defer termbox.Close()
 	wide, tall := termbox.Size()
 
-	term := terminal.New(wide-2, tall-2, f)
-	term.Stderr = ioutil.Discard
+	term.Resize(wide-2, tall-2)
 	// TODO: separate window for the log output
 	term.Write([]byte("boxterm - debug frontend\r\n"))
 
 	endc := make(chan bool)
+	updatec := make(chan bool, 1)
 	go func() {
-		defer func() {
-			if x := recover(); x != nil {
+		defer logpanic()
+		for {
+			err := term.Parse()
+			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
+				break
 			}
-		}()
-		_, err := io.Copy(term, f)
-		if err != nil && err != io.EOF {
-			fmt.Fprintln(os.Stderr, err)
+			select {
+			case updatec <- true:
+			default:
+			}
 		}
 		close(endc)
 	}()
 
 	go func() {
-		defer func() {
-			if x := recover(); x != nil {
-				fmt.Fprintln(os.Stderr, err)
-			}
-		}()
-		io.Copy(f, os.Stdin)
+		defer logpanic()
+		io.Copy(pty, os.Stdin)
 	}()
 
 	eventc := make(chan termbox.Event, 4)
@@ -140,7 +147,6 @@ func main() {
 		}
 	}()
 
-	tickc := time.Tick(50 * time.Millisecond)
 	for {
 		select {
 		case ev := <-eventc:
@@ -151,8 +157,8 @@ func main() {
 			}
 		case <-endc:
 			return
-		case <-tickc:
-			update(term, wide-2, tall-2)
+		case <-updatec:
+			update(term, &state, wide-2, tall-2)
 		}
 	}
 }

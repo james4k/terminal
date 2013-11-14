@@ -1,8 +1,7 @@
 /*
-Package terminal is a vt10x terminal emulation backend, heavily influenced by
-st, the 'simple terminal' over at http://st.suckless.org - in fact, at this
-point it is basically a port of pieces of st to Go.
+Package terminal is a vt10x terminal emulation backend, influenced
+largely by st, rxvt, xterm, and iTerm as excellent references.
 
-In early development.
+In development, but very usable.
 */
 package terminal

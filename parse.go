@@ -4,7 +4,7 @@ func isControlCode(c rune) bool {
 	return c < 0x20 || c == 0177
 }
 
-func (t *VT) parse(c rune) {
+func (t *State) parse(c rune) {
 	if isControlCode(c) {
 		if t.handleControlCodes(c) || t.cur.attr.mode&attrGfx == 0 {
 			return
@@ -19,6 +19,7 @@ func (t *VT) parse(c rune) {
 
 	if t.mode&ModeInsert != 0 && t.cur.x+1 < t.cols {
 		// TODO: move shiz, look at st.c:2458
+		t.logln("insert mode not implemented")
 	}
 
 	t.setChar(c, &t.cur.attr, t.cur.x, t.cur.y)
@@ -29,7 +30,7 @@ func (t *VT) parse(c rune) {
 	}
 }
 
-func (t *VT) parseEsc(c rune) {
+func (t *State) parseEsc(c rune) {
 	if t.handleControlCodes(c) {
 		return
 	}
@@ -87,7 +88,7 @@ func (t *VT) parseEsc(c rune) {
 	t.state = next
 }
 
-func (t *VT) parseEscCSI(c rune) {
+func (t *State) parseEscCSI(c rune) {
 	if t.handleControlCodes(c) {
 		return
 	}
@@ -97,7 +98,7 @@ func (t *VT) parseEscCSI(c rune) {
 	}
 }
 
-func (t *VT) parseEscStr(c rune) {
+func (t *State) parseEscStr(c rune) {
 	switch c {
 	case '\033':
 		t.state = t.parseEscStrEnd
@@ -109,7 +110,7 @@ func (t *VT) parseEscStr(c rune) {
 	}
 }
 
-func (t *VT) parseEscStrEnd(c rune) {
+func (t *State) parseEscStrEnd(c rune) {
 	if t.handleControlCodes(c) {
 		return
 	}
@@ -119,7 +120,7 @@ func (t *VT) parseEscStrEnd(c rune) {
 	}
 }
 
-func (t *VT) parseEscAltCharset(c rune) {
+func (t *State) parseEscAltCharset(c rune) {
 	if t.handleControlCodes(c) {
 		return
 	}
@@ -139,7 +140,7 @@ func (t *VT) parseEscAltCharset(c rune) {
 	t.state = t.parse
 }
 
-func (t *VT) parseEscTest(c rune) {
+func (t *State) parseEscTest(c rune) {
 	if t.handleControlCodes(c) {
 		return
 	}
@@ -154,7 +155,7 @@ func (t *VT) parseEscTest(c rune) {
 	t.state = t.parse
 }
 
-func (t *VT) handleControlCodes(c rune) bool {
+func (t *State) handleControlCodes(c rune) bool {
 	if !isControlCode(c) {
 		return false
 	}
