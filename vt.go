@@ -37,7 +37,7 @@ func Start(state *State, cmd *exec.Cmd) (*VT, *os.File, error) {
 }
 
 // Create initializes a virtual terminal emulator with the target state
-// and the io.ReadCloser input.
+// and io.ReadCloser input.
 func Create(state *State, rc io.ReadCloser) (*VT, error) {
 	t := &VT{
 		dest: state,
