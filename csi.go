@@ -153,7 +153,7 @@ func (t *State) handleCSI() {
 		t.deleteChars(c.arg(0, 1))
 	case 'Z': // CBT - cursor backward tabulation <n> tab stops
 		n := c.arg(0, 1)
-		for i := 0; i < n; n++ {
+		for i := 0; i < n; i++ {
 			t.putTab(false)
 		}
 	case 'd': // VPA - move to <row>
